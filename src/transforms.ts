@@ -192,60 +192,168 @@ function isThinkingEnabled(thinking: unknown): boolean {
 }
 
 export function repairToolPairs(messages: Message[]): Message[] {
-  // Collect all tool_use ids and tool_result tool_use_ids
-  const toolUseIds = new Set<string>()
-  const toolResultIds = new Set<string>()
-
+  const allToolUseIds = new Set<string>()
   for (const message of messages) {
-    if (!Array.isArray(message.content)) continue
+    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+      continue
+    }
+
     for (const block of message.content) {
       const id = block["id"]
       if (block.type === "tool_use" && typeof id === "string") {
-        toolUseIds.add(id)
-      }
-      const toolUseId = block["tool_use_id"]
-      if (block.type === "tool_result" && typeof toolUseId === "string") {
-        toolResultIds.add(toolUseId)
+        allToolUseIds.add(id)
       }
     }
   }
 
-  // Find orphaned IDs
-  const orphanedUses = new Set<string>()
-  for (const id of toolUseIds) {
-    if (!toolResultIds.has(id)) orphanedUses.add(id)
-  }
-  const orphanedResults = new Set<string>()
-  for (const id of toolResultIds) {
-    if (!toolUseIds.has(id)) orphanedResults.add(id)
-  }
+  const out: Message[] = []
+  for (let index = 0; index < messages.length; ) {
+    const message = messages[index]
+    const content = message.content
 
-  // Early return if nothing to fix
-  if (orphanedUses.size === 0 && orphanedResults.size === 0) {
-    return messages
-  }
-
-  // Filter orphaned blocks and remove messages with empty content arrays
-  return messages
-    .map((message) => {
-      if (!Array.isArray(message.content)) return message
-      const filtered = message.content.filter((block) => {
+    if (message.role === "assistant" && Array.isArray(content)) {
+      const seenToolUseIds = new Set<string>()
+      const toolUseIds: string[] = []
+      for (const block of content) {
         const id = block["id"]
-        if (block.type === "tool_use" && typeof id === "string") {
-          return !orphanedUses.has(id)
+        if (
+          block.type === "tool_use" &&
+          typeof id === "string" &&
+          !seenToolUseIds.has(id)
+        ) {
+          seenToolUseIds.add(id)
+          toolUseIds.push(id)
         }
+      }
+
+      if (toolUseIds.length > 0) {
+        out.push(message)
+
+        const next = messages[index + 1]
+        const nextContent: ContentBlock[] | undefined =
+          next?.role === "user" && Array.isArray(next.content)
+            ? next.content
+            : undefined
+        const usedResultIndexes = new Set<number>()
+        const resultBlocks = toolUseIds.map((toolUseId) => {
+          const matchedIndex =
+            nextContent?.findIndex((block, blockIndex) => {
+              if (usedResultIndexes.has(blockIndex)) return false
+              return (
+                block.type === "tool_result" &&
+                block["tool_use_id"] === toolUseId
+              )
+            }) ?? -1
+
+          if (matchedIndex !== -1) {
+            usedResultIndexes.add(matchedIndex)
+            return nextContent![matchedIndex]
+          }
+
+          return omittedToolResult(toolUseId)
+        })
+
+        if (nextContent) {
+          const staleBlocks: ContentBlock[] = []
+          const otherBlocks: ContentBlock[] = []
+          for (
+            let blockIndex = 0;
+            blockIndex < nextContent.length;
+            blockIndex += 1
+          ) {
+            const block = nextContent[blockIndex]
+            if (block.type !== "tool_result") {
+              otherBlocks.push(block)
+              continue
+            }
+
+            if (usedResultIndexes.has(blockIndex)) continue
+
+            const toolUseId = block["tool_use_id"]
+            if (typeof toolUseId === "string" && allToolUseIds.has(toolUseId)) {
+              continue
+            }
+
+            const staleBlock = toStaleText(block)
+            if (staleBlock) staleBlocks.push(staleBlock)
+          }
+
+          out.push({
+            ...next,
+            content: [...resultBlocks, ...staleBlocks, ...otherBlocks],
+          })
+          index += 2
+        } else {
+          out.push({ role: "user", content: resultBlocks })
+          index += 1
+        }
+        continue
+      }
+    }
+
+    if (
+      message.role === "user" &&
+      Array.isArray(content) &&
+      content.some((block) => block.type === "tool_result")
+    ) {
+      const keptBlocks: ContentBlock[] = []
+      for (const block of content) {
+        if (block.type !== "tool_result") {
+          keptBlocks.push(block)
+          continue
+        }
+
         const toolUseId = block["tool_use_id"]
-        if (block.type === "tool_result" && typeof toolUseId === "string") {
-          return !orphanedResults.has(toolUseId)
+        if (typeof toolUseId === "string" && allToolUseIds.has(toolUseId)) {
+          continue
         }
-        return true
-      })
-      return { ...message, content: filtered }
-    })
-    .filter(
-      (message) =>
-        !(Array.isArray(message.content) && message.content.length === 0),
-    )
+
+        const staleBlock = toStaleText(block)
+        if (staleBlock) keptBlocks.push(staleBlock)
+      }
+
+      if (keptBlocks.length > 0) {
+        out.push({ ...message, content: keptBlocks })
+      }
+      index += 1
+      continue
+    }
+
+    out.push(message)
+    index += 1
+  }
+
+  return out
+}
+
+function omittedToolResult(toolUseId: string): ContentBlock {
+  return {
+    type: "tool_result",
+    tool_use_id: toolUseId,
+    content: "[Tool result omitted during context management]",
+    is_error: true,
+  }
+}
+
+function toStaleText(block: ContentBlock): ContentBlock | null {
+  const content = block["content"]
+  let text = ""
+  if (typeof content === "string") {
+    text = content.trim().length > 0 ? content : ""
+  } else if (Array.isArray(content)) {
+    text = content
+      .filter(
+        (entry) =>
+          isRecord(entry) &&
+          entry.type === "text" &&
+          typeof entry.text === "string",
+      )
+      .map((entry) => entry.text as string)
+      .join("\n")
+  }
+
+  if (text.length === 0) return null
+  return { type: "text", text: `[stale tool result]\n${text}` }
 }
 
 export function transformBody(
@@ -324,10 +432,6 @@ export function transformBody(
       })
     }
 
-    if (Array.isArray(parsed.messages)) {
-      parsed.messages = repairToolPairs(parsed.messages)
-    }
-
     if (typeof parsed.max_tokens === "number") {
       parsed.max_tokens = Math.min(64000, parsed.max_tokens)
     }
@@ -347,6 +451,10 @@ export function transformBody(
       applyLegacySystemRelocation(
         parsed as { system?: SystemEntry[]; messages?: Message[] },
       )
+    }
+
+    if (Array.isArray(parsed.messages)) {
+      parsed.messages = repairToolPairs(parsed.messages)
     }
 
     if (!Array.isArray(parsed.messages)) parsed.messages = []

@@ -8,6 +8,13 @@ import {
 } from "./transforms.ts"
 import { sessionId } from "./session.ts"
 
+const omittedResult = (toolUseId: string) => ({
+  type: "tool_result",
+  tool_use_id: toolUseId,
+  content: "[Tool result omitted during context management]",
+  is_error: true,
+})
+
 describe("transforms", () => {
   it("transformBody relocates third-party system prompt by default", () => {
     const input = JSON.stringify({
@@ -576,7 +583,7 @@ describe("transforms", () => {
   })
 
   describe("repairToolPairs", () => {
-    it("removes tool_use blocks with no matching tool_result", () => {
+    it("keeps a lone tool_use and inserts an omitted tool_result", () => {
       const messages = [
         {
           role: "assistant",
@@ -588,12 +595,20 @@ describe("transforms", () => {
         },
       ]
       const result = repairToolPairs(messages)
-      // The assistant message with only the orphaned tool_use should be removed
-      assert.equal(result.length, 1)
-      assert.equal(result[0].role, "user")
+
+      assert.deepEqual(result, [
+        messages[0],
+        {
+          role: "user",
+          content: [
+            omittedResult("toolu_orphan"),
+            { type: "text", text: "no tool_result here" },
+          ],
+        },
+      ])
     })
 
-    it("removes tool_result blocks with no matching tool_use", () => {
+    it("converts a pure orphan tool_result into stale text", () => {
       const messages = [
         {
           role: "user",
@@ -603,11 +618,15 @@ describe("transforms", () => {
         },
       ]
       const result = repairToolPairs(messages)
-      // The user message with only the orphaned tool_result should be removed
-      assert.equal(result.length, 0)
+      assert.deepEqual(result, [
+        {
+          role: "user",
+          content: [{ type: "text", text: "[stale tool result]\nok" }],
+        },
+      ])
     })
 
-    it("preserves text blocks when removing orphaned tool_use", () => {
+    it("preserves assistant text and tool_use while inserting an omitted tool_result", () => {
       const messages = [
         {
           role: "assistant",
@@ -618,9 +637,12 @@ describe("transforms", () => {
         },
       ]
       const result = repairToolPairs(messages)
-      assert.equal(result.length, 1)
-      assert.deepEqual(result[0].content, [
-        { type: "text", text: "I will search for that." },
+      assert.deepEqual(result, [
+        messages[0],
+        {
+          role: "user",
+          content: [omittedResult("toolu_orphan")],
+        },
       ])
     })
 
@@ -651,31 +673,47 @@ describe("transforms", () => {
       assert.deepEqual(result, messages)
     })
 
-    it("handles mix of valid and orphaned tool blocks", () => {
+    it("keeps all tool_use blocks and synthesizes missing tool_results", () => {
       const messages = [
         {
           role: "assistant",
           content: [
-            { type: "tool_use", id: "toolu_valid", name: "search" },
-            { type: "tool_use", id: "toolu_orphan", name: "lookup" },
+            { type: "tool_use", id: "toolu_matched", name: "search" },
+            { type: "tool_use", id: "toolu_missing", name: "read" },
           ],
         },
         {
           role: "user",
           content: [
-            { type: "tool_result", tool_use_id: "toolu_valid", content: "ok" },
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_matched",
+              content: "ok",
+            },
           ],
         },
       ]
+
       const result = repairToolPairs(messages)
-      assert.equal(result.length, 2)
-      // Only the valid tool_use remains
-      assert.deepEqual(result[0].content, [
-        { type: "tool_use", id: "toolu_valid", name: "search" },
-      ])
-      // tool_result for valid stays
-      assert.deepEqual(result[1].content, [
-        { type: "tool_result", tool_use_id: "toolu_valid", content: "ok" },
+      assert.deepEqual(result, [
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "toolu_matched", name: "search" },
+            { type: "tool_use", id: "toolu_missing", name: "read" },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_matched",
+              content: "ok",
+            },
+            omittedResult("toolu_missing"),
+          ],
+        },
       ])
     })
 
@@ -688,29 +726,69 @@ describe("transforms", () => {
       assert.deepEqual(result, messages)
     })
 
-    it("handles multiple valid pairs", () => {
+    it("handles multiple valid pairs without changes", () => {
       const messages = [
         {
           role: "assistant",
-          content: [
-            { type: "tool_use", id: "toolu_a", name: "search" },
-            { type: "tool_use", id: "toolu_b", name: "read" },
-          ],
+          content: [{ type: "tool_use", id: "toolu_a", name: "search" }],
         },
         {
           role: "user",
           content: [
-            { type: "tool_result", tool_use_id: "toolu_a", content: "res_a" },
-            { type: "tool_result", tool_use_id: "toolu_b", content: "res_b" },
+            { type: "tool_result", tool_use_id: "toolu_a", content: "a" },
+          ],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_b", name: "read" }],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_b", content: "b" },
           ],
         },
       ]
       const result = repairToolPairs(messages)
       assert.deepEqual(result, messages)
     })
+
+    it("drops delayed tool_result for a known tool_use after synthesizing the adjacent result", () => {
+      const messages = [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_a", name: "search" }],
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "ordinary message in between" }],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_a", content: "late" },
+          ],
+        },
+      ]
+
+      const result = repairToolPairs(messages)
+      assert.deepEqual(result, [
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_a", name: "search" }],
+        },
+        {
+          role: "user",
+          content: [
+            omittedResult("toolu_a"),
+            { type: "text", text: "ordinary message in between" },
+          ],
+        },
+      ])
+    })
   })
 
-  it("transformBody removes orphaned tool_use blocks from messages", () => {
+  it("transformBody keeps tool_use blocks and inserts omitted tool_results", () => {
     const input = JSON.stringify({
       system: [{ type: "text", text: "prompt" }],
       messages: [
@@ -724,22 +802,52 @@ describe("transforms", () => {
 
     const output = transformBody(input)
     const parsed = JSON.parse(output as string) as {
+      system: Array<{ text: string; cache_control?: unknown }>
       messages: Array<{
         role: string
-        content: string | Array<{ text?: string }>
+        content:
+          | string
+          | Array<{
+              type?: string
+              id?: string
+              name?: string
+              text?: string
+              tool_use_id?: string
+              content?: string
+              is_error?: boolean
+              cache_control?: unknown
+            }>
       }>
     }
 
-    // Orphaned tool_use message should be removed.
-    // The user message remains, with cache_control applied by prompt caching.
-    assert.equal(parsed.messages.length, 1)
-    assert.equal(parsed.messages[0].role, "user")
-    const content = parsed.messages[0].content
-    const text = Array.isArray(content) ? content[0].text : content
-    assert.ok(
-      text?.includes("hello"),
-      "User message content should be preserved",
+    assert.equal(parsed.system.length, 2)
+    assert.ok(parsed.system[0].text.startsWith("x-anthropic-billing-header:"))
+    assert.equal(
+      parsed.system[1].text,
+      "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
     )
+
+    assert.equal(parsed.messages.length, 3)
+    assert.deepEqual(parsed.messages[0], {
+      role: "assistant",
+      content: [{ type: "tool_use", id: "toolu_orphan", name: "mcp_Search" }],
+    })
+
+    assert.equal(parsed.messages[1].role, "user")
+    assert.ok(Array.isArray(parsed.messages[1].content))
+    assert.equal(parsed.messages[1].content[0].type, "tool_result")
+    assert.equal(parsed.messages[1].content[0].tool_use_id, "toolu_orphan")
+    assert.equal(
+      parsed.messages[1].content[0].content,
+      "[Tool result omitted during context management]",
+    )
+    assert.equal(parsed.messages[1].content[0].is_error, true)
+
+    assert.equal(parsed.messages[2].role, "user")
+    assert.ok(Array.isArray(parsed.messages[2].content))
+    assert.ok(parsed.messages[2].content[0].text?.includes("prompt"))
+    assert.ok(parsed.messages[2].content[0].text?.includes("hello"))
+    assert.ok(parsed.messages[2].content[0].cache_control)
   })
 
   it("transformResponseStream flushes remaining buffered data on stream end", async () => {
