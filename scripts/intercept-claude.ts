@@ -4,9 +4,9 @@
  * optionally updates src/model-config.ts with any changes found.
  *
  * Usage:
- *   pnpm run intercept                  # default: claude-sonnet-4-6
- *   pnpm run intercept:all              # all supported models
- *   pnpm run intercept:update           # all models + write changes to model-config.ts
+ *   npm run intercept                   # default: claude-sonnet-4-6
+ *   npm run intercept:all               # all supported models
+ *   npm run intercept:update            # all models + write changes to model-config.ts
  *
  * Security: This starts a local HTTP proxy that forwards real OAuth tokens
  * to api.anthropic.com over HTTPS. The local leg is plaintext on localhost.

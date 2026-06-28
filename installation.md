@@ -51,7 +51,7 @@ Add the tagged GitHub fork to the `plugin` array:
 ```json
 {
   "plugin": [
-    "git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc1"
+    "git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc2"
   ]
 }
 ```
@@ -65,7 +65,7 @@ Or run this command to do it automatically:
 node -e "
 const fs = require('fs'), p = require('path').join(require('os').homedir(), '.config/opencode/opencode.json');
 const c = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p,'utf8')) : {};
-const spec = 'git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc1';
+const spec = 'git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc2';
 c.plugin = [...new Set([...(Array.isArray(c.plugin) ? c.plugin : [])
   .filter(x => x !== 'opencode-claude-auth' && x !== 'opencode-claude-auth@latest'), spec])];
 fs.mkdirSync(require('path').dirname(p), {recursive:true});
@@ -96,7 +96,7 @@ Verify the plugin was added:
 cat ~/.config/opencode/opencode.json
 ```
 
-You should see the `git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc1`
+You should see the `git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc2`
 spec in the `plugin` array.
 
 ## Upgrading

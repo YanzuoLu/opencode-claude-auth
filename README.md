@@ -38,7 +38,7 @@ Install the YanzuoLu/opencode-claude-auth fork and configure it by following: ht
    ```json
    {
      "plugin": [
-       "git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc1"
+       "git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc2"
      ]
    }
    ```
@@ -155,7 +155,7 @@ Add `enable1mContext` to any agent in your `opencode.json` (project-level or `~/
 ```json
 {
   "plugin": [
-    "git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc1"
+    "git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc2"
   ],
   "agent": {
     "build": {
@@ -182,8 +182,8 @@ If a long context error still occurs (e.g. from a beta flag added via `ANTHROPIC
 To verify the direct OAuth token refresh works with your credentials:
 
 ```bash
-pnpm run validate:oauth           # refresh + write-back (safe, keeps credentials valid)
-pnpm run validate:oauth -- --dry-run  # show what would be sent without making the request
+npm run validate:oauth           # refresh + write-back (safe, keeps credentials valid)
+npm run validate:oauth -- --dry-run  # show what would be sent without making the request
 ```
 
 This reads your stored credentials, calls Anthropic's OAuth token endpoint, and writes the new tokens back to storage. Refresh tokens rotate on each use, so write-back is enabled by default to keep your stored credentials valid.

@@ -340,7 +340,7 @@ function updateReadme(results: ModelResult[]): void {
 
   const section = `## Supported models
 
-${supported.length} supported models. Run \`pnpm run test:models\` to verify against your account.
+${supported.length} supported models. Run \`npm run test:models\` to verify against your account.
 
 | Model |
 |-------|

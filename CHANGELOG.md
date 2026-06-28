@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.4-cc2 (2026-06-28)
+
+- Adjust git install packaging for OpenCode by avoiding git-dependency prepare triggers and declaring the OpenCode plugin package as a runtime dependency.
+
 ## 1.5.4-cc1 (2026-06-28)
 
 ### Changes

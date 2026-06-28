@@ -8,8 +8,8 @@
  * to keep your stored credentials valid.
  *
  * Usage:
- *   pnpm run validate:oauth
- *   pnpm run validate:oauth -- --dry-run
+ *   npm run validate:oauth
+ *   npm run validate:oauth -- --dry-run
  *
  * Options:
  *   --dry-run         Show what would be sent without making the request
