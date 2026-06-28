@@ -3,11 +3,73 @@ import { describe, it } from "node:test"
 import {
   getModelBetas,
   isLongContextError,
+  modelHasDefault1mContext,
+  normalize1mModelId,
+  normalizeModelId,
+  shouldAdd1mContextBeta,
   supports1mContext,
 } from "./betas.ts"
 import { config, getModelOverride } from "./model-config.ts"
+import { applyOpencodeConfig, resetPluginSettings } from "./plugin-config.ts"
 
 describe("betas", () => {
+  it("normalizes OMP-style 1M model suffixes", () => {
+    assert.equal(normalizeModelId("claude-sonnet-4-6[1m]"), "claude-sonnet-4-6")
+    assert.equal(normalizeModelId("claude-sonnet-4-6-1m"), "claude-sonnet-4-6")
+    assert.equal(normalizeModelId("claude-opus-4-7[1M]"), "claude-opus-4-7")
+    assert.equal(
+      normalizeModelId("claude-opus-4-8-fast[1m]"),
+      "claude-opus-4-8-fast",
+    )
+    assert.deepEqual(normalize1mModelId("claude-opus-4-6-1m"), {
+      modelId: "claude-opus-4-6",
+      requested1m: true,
+    })
+    assert.deepEqual(normalize1mModelId("claude-opus-4-6"), {
+      modelId: "claude-opus-4-6",
+      requested1m: false,
+    })
+  })
+
+  it("shouldAdd1mContextBeta follows OMP 1M beta rules", () => {
+    const saved = process.env.ANTHROPIC_ENABLE_1M_CONTEXT
+    delete process.env.ANTHROPIC_ENABLE_1M_CONTEXT
+    resetPluginSettings()
+    try {
+      assert.equal(shouldAdd1mContextBeta("claude-sonnet-4-6"), false)
+      assert.equal(shouldAdd1mContextBeta("claude-sonnet-4-6[1m]"), true)
+      assert.equal(shouldAdd1mContextBeta("claude-sonnet-4-6-1m"), true)
+      assert.equal(shouldAdd1mContextBeta("claude-opus-4-6[1m]"), true)
+      assert.equal(shouldAdd1mContextBeta("claude-opus-4-6-fast-1m"), true)
+      assert.equal(shouldAdd1mContextBeta("claude-fable-5[1m]"), false)
+      assert.equal(shouldAdd1mContextBeta("claude-mythos-5[1m]"), false)
+      assert.equal(shouldAdd1mContextBeta("claude-opus-4-7[1m]"), false)
+      assert.equal(shouldAdd1mContextBeta("claude-opus-4-8-fast[1m]"), false)
+      assert.equal(shouldAdd1mContextBeta("claude-opus-4-8-1m"), false)
+      assert.equal(shouldAdd1mContextBeta("claude-sonnet-4-5-1m"), false)
+      assert.equal(shouldAdd1mContextBeta("claude-haiku-4-5-1m"), false)
+
+      process.env.ANTHROPIC_ENABLE_1M_CONTEXT = "true"
+      assert.equal(shouldAdd1mContextBeta("claude-sonnet-4-6"), true)
+      assert.equal(shouldAdd1mContextBeta("claude-opus-4-6"), true)
+      assert.equal(shouldAdd1mContextBeta("claude-opus-4-7"), false)
+      assert.equal(shouldAdd1mContextBeta("claude-fable-5"), false)
+      assert.equal(shouldAdd1mContextBeta("claude-haiku-4-5"), false)
+
+      delete process.env.ANTHROPIC_ENABLE_1M_CONTEXT
+      applyOpencodeConfig({ agent: { build: { enable1mContext: true } } })
+      assert.equal(shouldAdd1mContextBeta("claude-sonnet-4-6"), true)
+      assert.equal(shouldAdd1mContextBeta("claude-opus-4-7"), false)
+    } finally {
+      resetPluginSettings()
+      if (saved !== undefined) {
+        process.env.ANTHROPIC_ENABLE_1M_CONTEXT = saved
+      } else {
+        delete process.env.ANTHROPIC_ENABLE_1M_CONTEXT
+      }
+    }
+  })
+
   it("getModelBetas includes all baseBetas from config for sonnet 4.6", () => {
     const saved = process.env.ANTHROPIC_ENABLE_1M_CONTEXT
     delete process.env.ANTHROPIC_ENABLE_1M_CONTEXT
@@ -142,7 +204,12 @@ describe("betas", () => {
       const models = [
         "claude-sonnet-4-6",
         "claude-opus-4-6",
+        "claude-fable-5",
+        "claude-mythos-5",
         "claude-opus-4-7",
+        "claude-opus-4-7-fast",
+        "claude-opus-4-8",
+        "claude-opus-4-8-fast",
         "claude-sonnet-4-5-20250514",
         "claude-opus-4-5-20250514",
         "claude-opus-4-20250514",
@@ -161,7 +228,7 @@ describe("betas", () => {
     }
   })
 
-  it("getModelBetas adds context-1m when ANTHROPIC_ENABLE_1M_CONTEXT=true for 4.6+ models", () => {
+  it("getModelBetas adds context-1m when ANTHROPIC_ENABLE_1M_CONTEXT=true for 4.6 models only", () => {
     process.env.ANTHROPIC_ENABLE_1M_CONTEXT = "true"
     try {
       const sonnet = getModelBetas("claude-sonnet-4-6")
@@ -178,11 +245,65 @@ describe("betas", () => {
 
       const opus47 = getModelBetas("claude-opus-4-7")
       assert.ok(
-        opus47.includes("context-1m-2025-08-07"),
-        "opus 4.7 should get 1M beta when opted in",
+        !opus47.includes("context-1m-2025-08-07"),
+        "opus 4.7 is default 1M and should not get the 1M beta",
+      )
+
+      const fable = getModelBetas("claude-fable-5")
+      assert.ok(
+        !fable.includes("context-1m-2025-08-07"),
+        "fable 5 is default 1M and should not get the 1M beta",
       )
     } finally {
       delete process.env.ANTHROPIC_ENABLE_1M_CONTEXT
+    }
+  })
+
+  it("getModelBetas adds context-1m for explicit 4.6 1M suffix aliases only", () => {
+    const saved = process.env.ANTHROPIC_ENABLE_1M_CONTEXT
+    delete process.env.ANTHROPIC_ENABLE_1M_CONTEXT
+    try {
+      const sonnetSuffix = getModelBetas("claude-sonnet-4-6[1m]")
+      assert.ok(
+        sonnetSuffix.includes("context-1m-2025-08-07"),
+        "sonnet 4.6 [1m] should get 1M beta",
+      )
+
+      const sonnetAlias = getModelBetas("claude-sonnet-4-6-1m")
+      assert.ok(
+        sonnetAlias.includes("context-1m-2025-08-07"),
+        "sonnet 4.6 -1m should get 1M beta",
+      )
+
+      const opusAlias = getModelBetas("claude-opus-4-6-1m")
+      assert.ok(
+        opusAlias.includes("context-1m-2025-08-07"),
+        "opus 4.6 -1m should get 1M beta",
+      )
+
+      const opusFastAlias = getModelBetas("claude-opus-4-6-fast-1m")
+      assert.ok(
+        opusFastAlias.includes("context-1m-2025-08-07"),
+        "opus 4.6 fast -1m should get 1M beta",
+      )
+
+      const opus47 = getModelBetas("claude-opus-4-7[1m]")
+      assert.ok(
+        !opus47.includes("context-1m-2025-08-07"),
+        "opus 4.7 [1m] should not get 1M beta",
+      )
+
+      const haiku = getModelBetas("claude-haiku-4-5-1m")
+      assert.ok(
+        !haiku.includes("context-1m-2025-08-07"),
+        "haiku -1m should not get 1M beta",
+      )
+    } finally {
+      if (saved !== undefined) {
+        process.env.ANTHROPIC_ENABLE_1M_CONTEXT = saved
+      } else {
+        delete process.env.ANTHROPIC_ENABLE_1M_CONTEXT
+      }
     }
   })
 
@@ -214,7 +335,46 @@ describe("betas", () => {
   it("supports1mContext identifies eligible models", () => {
     assert.ok(supports1mContext("claude-sonnet-4-6"), "sonnet 4.6 supports 1M")
     assert.ok(supports1mContext("claude-opus-4-6"), "opus 4.6 supports 1M")
+    assert.ok(
+      supports1mContext("claude-sonnet-4-6[1m]"),
+      "sonnet 4.6 [1m] supports 1M",
+    )
+    assert.ok(supports1mContext("claude-fable-5"), "fable 5 supports 1M")
+    assert.ok(supports1mContext("claude-mythos-5"), "mythos 5 supports 1M")
     assert.ok(supports1mContext("claude-opus-4-7"), "opus 4.7 supports 1M")
+    assert.ok(
+      supports1mContext("claude-opus-4-7-fast"),
+      "opus 4.7 fast supports 1M",
+    )
+    assert.ok(supports1mContext("claude-opus-4-8-1m"), "opus 4.8 supports 1M")
+    assert.ok(
+      supports1mContext("claude-opus-4-8-fast[1m]"),
+      "opus 4.8 fast supports 1M",
+    )
+    assert.ok(
+      modelHasDefault1mContext("claude-fable-5"),
+      "fable 5 is default 1M",
+    )
+    assert.ok(
+      modelHasDefault1mContext("claude-mythos-5"),
+      "mythos 5 is default 1M",
+    )
+    assert.ok(
+      modelHasDefault1mContext("claude-opus-4-7"),
+      "opus 4.7 is default 1M",
+    )
+    assert.ok(
+      modelHasDefault1mContext("claude-opus-4-8"),
+      "opus 4.8 is default 1M",
+    )
+    assert.ok(
+      modelHasDefault1mContext("claude-opus-4-8-fast"),
+      "opus 4.8 fast is default 1M",
+    )
+    assert.ok(
+      !modelHasDefault1mContext("claude-sonnet-4-6"),
+      "sonnet 4.6 requires explicit beta opt-in",
+    )
     assert.ok(
       !supports1mContext("claude-sonnet-4-5-20250514"),
       "sonnet 4.5 does not support 1M",

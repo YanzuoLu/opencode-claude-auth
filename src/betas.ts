@@ -4,6 +4,12 @@ import { isEnable1mContext } from "./plugin-config.ts"
 // Beta flags to try removing in order when "long context" errors occur
 export const LONG_CONTEXT_BETAS = config.longContextBetas
 export const EXTENDED_CACHE_TTL_BETA = "extended-cache-ttl-2025-04-11"
+export const ONE_M_CONTEXT_BETA = config.longContextBetas[0]
+
+type NormalizedModelId = {
+  modelId: string
+  requested1m: boolean
+}
 
 function appendBeta(betas: string[], beta: string): void {
   if (!betas.includes(beta)) betas.push(beta)
@@ -61,6 +67,22 @@ export function isLongContextError(responseBody: string): boolean {
   )
 }
 
+export function normalize1mModelId(modelId: string): NormalizedModelId {
+  if (/\[1m\]$/i.test(modelId)) {
+    return { modelId: modelId.slice(0, -"[1m]".length), requested1m: true }
+  }
+
+  if (/-1m$/i.test(modelId)) {
+    return { modelId: modelId.slice(0, -"-1m".length), requested1m: true }
+  }
+
+  return { modelId, requested1m: false }
+}
+
+export function normalizeModelId(modelId: string): string {
+  return normalize1mModelId(modelId).modelId
+}
+
 export function getNextBetaToExclude(modelId: string): string | null {
   const excluded = getExcludedBetas(modelId)
   for (const beta of LONG_CONTEXT_BETAS) {
@@ -72,21 +94,35 @@ export function getNextBetaToExclude(modelId: string): string | null {
 }
 
 export function supports1mContext(modelId: string): boolean {
-  const lower = modelId.toLowerCase()
-  if (!lower.includes("opus") && !lower.includes("sonnet")) return false
-  const versionMatch = lower.match(/(opus|sonnet)-(\d+)-(\d+)/)
-  if (!versionMatch) return false
-  const major = parseInt(versionMatch[2], 10)
-  const minor = parseInt(versionMatch[3], 10)
-  // Date suffixes like 20250514 are not minor versions — treat as x.0
-  const effectiveMinor = minor > 99 ? 0 : minor
-  return major > 4 || (major === 4 && effectiveMinor >= 6)
+  const lower = normalizeModelId(modelId).toLowerCase()
+  return modelHasDefault1mContext(lower) || modelSupports1mBetaOptIn(lower)
+}
+
+export function modelHasDefault1mContext(modelId: string): boolean {
+  const lower = normalizeModelId(modelId).toLowerCase()
+  return (
+    /^claude-(?:fable|mythos)-5(?:-\d{8})?$/.test(lower) ||
+    /^claude-opus-4-[78](?:-fast)?(?:-\d{8})?$/.test(lower)
+  )
+}
+
+function modelSupports1mBetaOptIn(modelId: string): boolean {
+  const lower = normalizeModelId(modelId).toLowerCase()
+  return /^claude-(?:opus|sonnet)-4-6(?:-fast)?(?:-\d{8})?$/.test(lower)
+}
+
+export function shouldAdd1mContextBeta(modelId: string): boolean {
+  const normalized = normalize1mModelId(modelId)
+  if (!modelSupports1mBetaOptIn(normalized.modelId)) return false
+  if (modelHasDefault1mContext(normalized.modelId)) return false
+  return normalized.requested1m || isEnable1mContext()
 }
 
 export function getModelBetas(
   modelId: string,
   excluded?: Set<string>,
 ): string[] {
+  const normalizedModelId = normalizeModelId(modelId)
   const betas = getRequiredBetas().filter(
     (beta) => beta !== EXTENDED_CACHE_TTL_BETA,
   )
@@ -97,14 +133,15 @@ export function getModelBetas(
   // without a subscription that covers long context billing causes
   // "Extra usage is required for long context requests" errors.
   //
-  // Users who want 1M context should set ANTHROPIC_ENABLE_1M_CONTEXT=true
-  // (requires a Claude Max subscription or a plan that covers extra usage).
-  if (isEnable1mContext() && supports1mContext(modelId)) {
-    appendBeta(betas, config.longContextBetas[0])
+  // Users who want 1M context should prefer selecting a [1m] / -1m model
+  // alias. The legacy ANTHROPIC_ENABLE_1M_CONTEXT=true / enable1mContext
+  // opt-in remains supported for Claude Sonnet/Opus 4.6 compatibility.
+  if (shouldAdd1mContextBeta(modelId)) {
+    appendBeta(betas, ONE_M_CONTEXT_BETA)
   }
 
   // Apply per-model overrides (e.g. haiku excludes claude-code-20250219)
-  const override = getModelOverride(modelId)
+  const override = getModelOverride(normalizedModelId)
   if (override) {
     if (override.exclude) {
       for (const ex of override.exclude) {

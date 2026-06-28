@@ -7,6 +7,7 @@ import {
 import { buildBillingHeaderValue } from "./signing.ts"
 import { config, getModelOverride } from "./model-config.ts"
 import { sessionId } from "./session.ts"
+import { normalizeModelId } from "./betas.ts"
 
 const TOOL_PREFIX = "mcp_"
 
@@ -266,6 +267,10 @@ export function transformBody(
       metadata?: unknown
       tools?: Array<{ name?: string } & Record<string, unknown>>
       messages?: Message[]
+    }
+
+    if (typeof parsed.model === "string") {
+      parsed.model = normalizeModelId(parsed.model)
     }
 
     parsed.system = buildSystemLayout(parsed)

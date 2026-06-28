@@ -4,7 +4,7 @@ GitHub-only fork: <https://github.com/YanzuoLu/opencode-claude-auth>
 
 Self-contained Anthropic auth provider for OpenCode using your Claude Code credentials — no separate login or API key needed.
 
-This fork adds omp-style Anthropic OAuth request shaping: `local-agent` / Claude Agent SDK identity, real cch billing-header attestation, 1-hour prompt-cache retention, stable cache breakpoints, and third-party system-prompt relocation by default to preserve Claude Code billing behavior.
+This fork adds omp-style Anthropic OAuth request shaping: `local-agent` / Claude Agent SDK identity, real cch billing-header attestation, 1-hour prompt-cache retention, stable cache breakpoints, OMP/Claude Code-style 1M model suffix aliases, and third-party system-prompt relocation by default to preserve Claude Code billing behavior.
 
 ## How it works
 
@@ -38,7 +38,7 @@ Install the YanzuoLu/opencode-claude-auth fork and configure it by following: ht
    ```json
    {
      "plugin": [
-       "git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc3"
+       "git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc4"
      ]
    }
    ```
@@ -65,7 +65,7 @@ Just run OpenCode. The plugin handles auth automatically — it reads your Claud
 
 ## Supported models
 
-15 supported model aliases are listed below. Note: the inherited `scripts/test-models.ts` smoke helper predates this fork's transform/cch/cache path and should not be used as the release gate for this fork.
+Supported model aliases are listed below. Note: the inherited `scripts/test-models.ts` smoke helper predates this fork's transform/cch/cache path and should not be used as the release gate for this fork.
 
 | Model                      |
 | -------------------------- |
@@ -78,12 +78,20 @@ Just run OpenCode. The plugin handles auth automatically — it reads your Claud
 | claude-opus-4-5            |
 | claude-opus-4-5-20251101   |
 | claude-opus-4-6            |
+| claude-opus-4-6[1m]        |
+| claude-opus-4-6-1m         |
 | claude-opus-4-7            |
+| claude-opus-4-7[1m]        |
+| claude-opus-4-7-1m         |
 | claude-sonnet-4-0          |
 | claude-sonnet-4-20250514   |
 | claude-sonnet-4-5          |
 | claude-sonnet-4-5-20250929 |
 | claude-sonnet-4-6          |
+| claude-sonnet-4-6[1m]      |
+| claude-sonnet-4-6-1m       |
+
+If OpenCode's Anthropic provider includes `claude-fable-5`, `claude-opus-4-8`, or other default-1M OMP models, this plugin also exposes matching `[1m]` and `-1m` aliases dynamically.
 
 ## Credential sources
 
@@ -144,18 +152,24 @@ unset CLAUDE_AUTH_DEBUG
 
 ## Long context (1M)
 
-The `context-1m-2025-08-07` beta header is not sent by default. Without it, the API caps context at 200k tokens.
+The plugin follows OMP / Claude Code model-selection semantics for 1M context:
 
-To enable 1M context (requires Claude Max or a plan with extra usage coverage), use **either** of these methods:
+- `claude-sonnet-4-6[1m]`, `claude-sonnet-4-6-1m`, `claude-opus-4-6[1m]`, and `claude-opus-4-6-1m` opt those 4.6 models into the `context-1m-2025-08-07` beta.
+- `claude-fable-5`, `claude-opus-4-7`, and `claude-opus-4-8` are default/always 1M models when present in OpenCode's Anthropic provider; their `[1m]` / `-1m` aliases are accepted but do not add the beta.
+- `claude-sonnet-4-5`, `claude-sonnet-4`, and Haiku models do not support 1M here, so no 1M aliases are exposed and no beta is added.
 
-**Option A: Config file** (recommended — no environment setup needed)
+Before the request is sent to Anthropic, `[1m]` and `-1m` are stripped from the JSON `model` field, so Anthropic receives the base model ID (for example, `claude-sonnet-4-6`).
 
-Add `enable1mContext` to any agent in your `opencode.json` (project-level or `~/.config/opencode/opencode.json`). Setting it in any one agent enables 1M context globally for all supported models — you don't need to set it for each agent:
+The recommended way to enable 1M for 4.6 models is to select the `[1m]` suffix model or the OpenCode-friendly `-1m` alias. The legacy global opt-in remains available for compatibility:
+
+**Option A: Config file**
+
+Add `enable1mContext` to any agent in your `opencode.json` (project-level or `~/.config/opencode/opencode.json`). Setting it in any one agent enables the 1M beta globally for Claude Sonnet/Opus 4.6 — you don't need to set it for each agent:
 
 ```json
 {
   "plugin": [
-    "git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc3"
+    "git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc4"
   ],
   "agent": {
     "build": {
@@ -173,7 +187,7 @@ export ANTHROPIC_ENABLE_1M_CONTEXT=true
 
 If both are set, the environment variable takes priority.
 
-The Claude CLI itself treats 1M context as opt-in (via a `[1m]` model suffix). Sending the beta without a plan that covers long context charges causes "Extra usage is required for long context requests" errors. Older upstream releases sent this beta automatically for 4.6+ models, which broke things for Pro users.
+Sending the beta without a plan that covers long context charges causes "Extra usage is required for long context requests" errors. Older upstream releases sent this beta automatically for 4.6+ models, which broke things for Pro users.
 
 If a long context error still occurs (e.g. from a beta flag added via `ANTHROPIC_BETA_FLAGS`), the plugin retries without the offending flag.
 
@@ -195,7 +209,7 @@ All configurable parameters can be overridden via environment variables. If Anth
 | Variable                               | Description                                                                                                                                                                                    | Default                                                                                                                                                                                               |
 | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ANTHROPIC_BETA_FLAGS`                 | Comma-separated beta feature flags. If unset, this fork uses the local-agent Claude Code agent beta set and appends `extended-cache-ttl-2025-04-11` last.                                      | `claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advanced-tool-use-2025-11-20` |
-| `ANTHROPIC_ENABLE_1M_CONTEXT`          | Enable 1M token context window for 4.6+ models (requires Max subscription)                                                                                                                     | `false`                                                                                                                                                                                               |
+| `ANTHROPIC_ENABLE_1M_CONTEXT`          | Legacy global opt-in for the 1M beta on Claude Sonnet/Opus 4.6. Prefer selecting `[1m]` or `-1m` model aliases.                                                                                | `false`                                                                                                                                                                                               |
 | `OPENCODE_CLAUDE_AUTH_CACHE_TTL`       | Set to `5m`, `none`, or `off` to disable the default 1-hour OAuth prompt-cache TTL and fall back to standard 5-minute ephemeral cache controls.                                                | OAuth defaults to `1h`                                                                                                                                                                                |
 | `OPENCODE_CLAUDE_AUTH_KEEP_SYSTEM`     | Set to `1` to keep third-party system prompts in `system[]` instead of relocating them into the first user message. This may cause Anthropic to classify the request as third-party app usage. | disabled                                                                                                                                                                                              |
 | `OPENCODE_CLAUDE_AUTH_RELOCATE_SYSTEM` | Legacy override. Set to `0`, `false`, or `off` to disable the default system relocation.                                                                                                       | enabled                                                                                                                                                                                               |
@@ -205,7 +219,7 @@ All configurable parameters can be overridden via environment variables. If Anth
 Example:
 
 ```bash
-export ANTHROPIC_ENABLE_1M_CONTEXT=true  # requires Claude Max
+export ANTHROPIC_ENABLE_1M_CONTEXT=true  # legacy global 4.6 1M opt-in
 export OPENCODE_CLAUDE_AUTH_CACHE_TTL=5m # rollback cache retention if needed
 ```
 
@@ -217,6 +231,7 @@ export OPENCODE_CLAUDE_AUTH_CACHE_TTL=5m # rollback cache retention if needed
 - Buffers SSE response streams at event boundaries for reliable tool name translation
 - Injects the local-agent / Claude Agent SDK identity via `experimental.chat.system.transform`
 - Sets required API headers (ordered beta flags, billing, local-agent user-agent, client/stainless headers) with model-aware selection
+- Adds OMP/Claude Code-style `[1m]` and `-1m` model aliases for eligible Anthropic models, then strips the suffix before sending the model ID to Anthropic
 - Patches the OAuth billing-header `cch=00000` placeholder at fetch time using `xxHash64(fullBody, seed)` before sending the request
 - Applies 1-hour OAuth prompt caching by upgrading existing OpenCode/AI-SDK 5-minute cache breakpoints and enforcing the Anthropic 4-breakpoint limit
 - Relocates third-party system prompts into the first user message by default, matching omp/Claude Code billing behavior; set `OPENCODE_CLAUDE_AUTH_KEEP_SYSTEM=1` to opt out

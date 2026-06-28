@@ -331,6 +331,29 @@ describe("transforms", () => {
     assert.equal(parsed.thinking, undefined)
   })
 
+  it("transformBody strips OMP-style 1M model suffixes before the API request", () => {
+    const bracket = JSON.parse(
+      transformBody(
+        JSON.stringify({
+          model: "claude-sonnet-4-6[1m]",
+          messages: [{ role: "user", content: "test" }],
+        }),
+      ) as string,
+    ) as { model?: string }
+
+    const alias = JSON.parse(
+      transformBody(
+        JSON.stringify({
+          model: "claude-opus-4-6-1m",
+          messages: [{ role: "user", content: "test" }],
+        }),
+      ) as string,
+    ) as { model?: string }
+
+    assert.equal(bracket.model, "claude-sonnet-4-6")
+    assert.equal(alias.model, "claude-opus-4-6")
+  })
+
   it("transformBody PascalCase-prefixes tool names with mcp_", () => {
     const input = JSON.stringify({
       system: [],

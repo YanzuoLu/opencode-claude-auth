@@ -12,6 +12,9 @@ import {
   getNextBetaToExclude,
   isLongContextError,
   LONG_CONTEXT_BETAS,
+  modelHasDefault1mContext,
+  normalizeModelId,
+  supports1mContext,
 } from "./betas.ts"
 import {
   SYSTEM_IDENTITY,
@@ -38,6 +41,11 @@ export {
   getNextBetaToExclude,
   isLongContextError,
   LONG_CONTEXT_BETAS,
+  modelHasDefault1mContext,
+  normalize1mModelId,
+  normalizeModelId,
+  shouldAdd1mContextBeta,
+  supports1mContext,
 } from "./betas.ts"
 export { resetExcludedBetas } from "./betas.ts"
 export {
@@ -93,6 +101,72 @@ function buildRequestUrl(input: RequestInfo | URL): string | URL {
 }
 
 type FetchFn = typeof fetch
+
+const ONE_M_CONTEXT_LIMIT = 1_000_000
+const ONE_M_MODEL_SUFFIXES = ["[1m]", "-1m"] as const
+
+type ProviderModelInfo = {
+  id?: string
+  name?: string
+  api?: Record<string, unknown>
+  limit?: Record<string, unknown>
+  cost?: unknown
+} & Record<string, unknown>
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+function withOneMillionContextLimit(
+  limit: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!limit) return undefined
+  const current = typeof limit.context === "number" ? limit.context : 0
+  return {
+    ...limit,
+    context: Math.max(current, ONE_M_CONTEXT_LIMIT),
+  }
+}
+
+function build1mAliasModel(
+  model: ProviderModelInfo,
+  aliasId: string,
+  suffix: string,
+): ProviderModelInfo {
+  return {
+    ...model,
+    id: aliasId,
+    name:
+      typeof model.name === "string" ? `${model.name} ${suffix}` : model.name,
+    api: isRecord(model.api) ? { ...model.api, id: aliasId } : model.api,
+    limit: withOneMillionContextLimit(model.limit),
+  }
+}
+
+export function add1mModelAliases<T extends Record<string, ProviderModelInfo>>(
+  models: T,
+): T {
+  const mutableModels = models as Record<string, ProviderModelInfo>
+  const entries = Object.entries(mutableModels)
+
+  for (const [modelId, model] of entries) {
+    const normalizedModelId = normalizeModelId(modelId)
+    if (normalizedModelId !== modelId) continue
+    if (!supports1mContext(modelId)) continue
+
+    if (modelHasDefault1mContext(modelId)) {
+      model.limit = withOneMillionContextLimit(model.limit)
+    }
+
+    for (const suffix of ONE_M_MODEL_SUFFIXES) {
+      const aliasId = `${modelId}${suffix}`
+      if (mutableModels[aliasId]) continue
+      mutableModels[aliasId] = build1mAliasModel(model, aliasId, suffix)
+    }
+  }
+
+  return models
+}
 
 // Maximum delay before we give up retrying and surface the error.
 // A retry-after longer than this signals a quota/usage-limit reset (hours away)
@@ -282,6 +356,12 @@ const plugin: Plugin = async () => {
   }
 
   return {
+    provider: {
+      id: "anthropic",
+      async models(provider) {
+        return add1mModelAliases(provider.models)
+      },
+    },
     config: async (opencodeConfig) => {
       applyOpencodeConfig(opencodeConfig)
     },
@@ -309,6 +389,8 @@ const plugin: Plugin = async () => {
           })
           return {}
         }
+
+        add1mModelAliases(provider.models)
 
         for (const model of Object.values(provider.models)) {
           model.cost = {

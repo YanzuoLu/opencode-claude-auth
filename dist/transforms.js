@@ -2,6 +2,7 @@ import { applyCaching, getCacheControl, } from "./caching.js";
 import { buildBillingHeaderValue } from "./signing.js";
 import { config, getModelOverride } from "./model-config.js";
 import { sessionId } from "./session.js";
+import { normalizeModelId } from "./betas.js";
 const TOOL_PREFIX = "mcp_";
 /**
  * Prefix a tool name with TOOL_PREFIX and uppercase the first character.
@@ -204,6 +205,9 @@ export function transformBody(body) {
     }
     try {
         const parsed = JSON.parse(body);
+        if (typeof parsed.model === "string") {
+            parsed.model = normalizeModelId(parsed.model);
+        }
         parsed.system = buildSystemLayout(parsed);
         // Strip effort for models that don't support it (e.g. haiku).
         // OpenCode sends { output_config: { effort: "high" } } but haiku

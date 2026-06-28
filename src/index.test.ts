@@ -207,6 +207,20 @@ function makeCreds(overrides?: Partial<ClaudeCredentials>): ClaudeCredentials {
   }
 }
 
+function makeProviderModel(id: string, context = 200_000) {
+  return {
+    id,
+    name: id,
+    api: {
+      id,
+      url: "https://api.anthropic.com/v1",
+      npm: "@ai-sdk/anthropic",
+    },
+    limit: { context, output: 64_000 },
+    cost: { input: 1, output: 1, cache: { read: 1, write: 1 } },
+  }
+}
+
 const accounts: Account[] = [
   {
     label: "Account 1",
@@ -416,6 +430,53 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
       headers.get("user-agent"),
       "claude-cli/2.1.165 (external, local-agent, agent-sdk/0.3.165)",
     )
+  })
+
+  it("add1mModelAliases adds only OMP-supported 1M provider aliases", () => {
+    const models = {
+      "claude-sonnet-4-6": makeProviderModel("claude-sonnet-4-6"),
+      "claude-opus-4-6": makeProviderModel("claude-opus-4-6"),
+      "claude-opus-4-6-fast": makeProviderModel("claude-opus-4-6-fast"),
+      "claude-fable-5": makeProviderModel("claude-fable-5"),
+      "claude-mythos-5": makeProviderModel("claude-mythos-5"),
+      "claude-opus-4-7": makeProviderModel("claude-opus-4-7"),
+      "claude-opus-4-7-fast": makeProviderModel("claude-opus-4-7-fast"),
+      "claude-opus-4-8": makeProviderModel("claude-opus-4-8"),
+      "claude-opus-4-8-fast": makeProviderModel("claude-opus-4-8-fast"),
+      "claude-sonnet-4-5": makeProviderModel("claude-sonnet-4-5"),
+      "claude-haiku-4-5": makeProviderModel("claude-haiku-4-5"),
+    }
+
+    helpers.add1mModelAliases(models)
+
+    assert.equal(models["claude-sonnet-4-6[1m]"].id, "claude-sonnet-4-6[1m]")
+    assert.equal(models["claude-sonnet-4-6-1m"].api.id, "claude-sonnet-4-6-1m")
+    assert.equal(models["claude-opus-4-6[1m]"].limit.context, 1_000_000)
+    assert.equal(
+      models["claude-opus-4-6-fast-1m"].id,
+      "claude-opus-4-6-fast-1m",
+    )
+    assert.equal(models["claude-fable-5[1m]"].api.id, "claude-fable-5[1m]")
+    assert.equal(models["claude-mythos-5-1m"].api.id, "claude-mythos-5-1m")
+    assert.equal(models["claude-opus-4-7-1m"].id, "claude-opus-4-7-1m")
+    assert.equal(
+      models["claude-opus-4-7-fast-1m"].id,
+      "claude-opus-4-7-fast-1m",
+    )
+    assert.equal(models["claude-opus-4-8[1m]"].id, "claude-opus-4-8[1m]")
+    assert.equal(
+      models["claude-opus-4-8-fast[1m]"].id,
+      "claude-opus-4-8-fast[1m]",
+    )
+    assert.equal(
+      models["claude-opus-4-7"].limit.context,
+      1_000_000,
+      "default-1M base models should expose a 1M context limit",
+    )
+    assert.equal(models["claude-sonnet-4-5[1m]"], undefined)
+    assert.equal(models["claude-sonnet-4-5-1m"], undefined)
+    assert.equal(models["claude-haiku-4-5[1m]"], undefined)
+    assert.equal(models["claude-haiku-4-5-1m"], undefined)
   })
 
   it("transformBody uses ccVersion, local-agent, and cch placeholder in billing header", () => {

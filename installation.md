@@ -51,7 +51,7 @@ Add the tagged GitHub fork to the `plugin` array:
 ```json
 {
   "plugin": [
-    "git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc3"
+    "git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc4"
   ]
 }
 ```
@@ -65,7 +65,7 @@ Or run this command to do it automatically:
 node -e "
 const fs = require('fs'), p = require('path').join(require('os').homedir(), '.config/opencode/opencode.json');
 const c = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p,'utf8')) : {};
-const spec = 'git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc3';
+const spec = 'git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc4';
 c.plugin = [...new Set([...(Array.isArray(c.plugin) ? c.plugin : [])
   .filter(x => x !== 'opencode-claude-auth' && x !== 'opencode-claude-auth@latest'), spec])];
 fs.mkdirSync(require('path').dirname(p), {recursive:true});
@@ -96,8 +96,12 @@ Verify the plugin was added:
 cat ~/.config/opencode/opencode.json
 ```
 
-You should see the `git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc3`
+You should see the `git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc4`
 spec in the `plugin` array.
+
+### Optional: 1M context model aliases
+
+For OMP/Claude Code-style long context on Claude Sonnet/Opus 4.6, select the `[1m]` model suffix (for example, `claude-sonnet-4-6[1m]`) or the OpenCode-friendly `-1m` alias (`claude-sonnet-4-6-1m`). The plugin strips the suffix before sending the Anthropic request and only adds the 1M beta for supported 4.6 models.
 
 ## Upgrading
 

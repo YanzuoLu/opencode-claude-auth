@@ -4,11 +4,11 @@ import { wrapFetchForCch } from "./cch.js";
 import { sessionId } from "./session.js";
 import { readAllClaudeAccounts } from "./keychain.js";
 import { initLogger, log } from "./logger.js";
-import { addExcludedBeta, getExcludedBetas, getModelBetas, getNextBetaToExclude, isLongContextError, LONG_CONTEXT_BETAS, } from "./betas.js";
+import { addExcludedBeta, getExcludedBetas, getModelBetas, getNextBetaToExclude, isLongContextError, LONG_CONTEXT_BETAS, modelHasDefault1mContext, normalizeModelId, supports1mContext, } from "./betas.js";
 import { SYSTEM_IDENTITY, transformBody, transformResponseStream, } from "./transforms.js";
 import { applyOpencodeConfig } from "./plugin-config.js";
 import { getCachedCredentials, getCredentialsForSync, syncAuthJson, initAccounts, setActiveAccountSource, loadPersistedAccountSource, saveAccountSource, refreshAccountsList, } from "./credentials.js";
-export { addExcludedBeta, getExcludedBetas, getModelBetas, getNextBetaToExclude, isLongContextError, LONG_CONTEXT_BETAS, } from "./betas.js";
+export { addExcludedBeta, getExcludedBetas, getModelBetas, getNextBetaToExclude, isLongContextError, LONG_CONTEXT_BETAS, modelHasDefault1mContext, normalize1mModelId, normalizeModelId, shouldAdd1mContextBeta, supports1mContext, } from "./betas.js";
 export { resetExcludedBetas } from "./betas.js";
 export { stripToolPrefix, transformBody, transformResponseStream, } from "./transforms.js";
 export { getCachedCredentials, syncAuthJson, refreshAccountsList, } from "./credentials.js";
@@ -40,6 +40,50 @@ function buildRequestUrl(input) {
         url.searchParams.set("beta", "true");
     }
     return typeof input === "string" ? url.toString() : url;
+}
+const ONE_M_CONTEXT_LIMIT = 1_000_000;
+const ONE_M_MODEL_SUFFIXES = ["[1m]", "-1m"];
+function isRecord(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function withOneMillionContextLimit(limit) {
+    if (!limit)
+        return undefined;
+    const current = typeof limit.context === "number" ? limit.context : 0;
+    return {
+        ...limit,
+        context: Math.max(current, ONE_M_CONTEXT_LIMIT),
+    };
+}
+function build1mAliasModel(model, aliasId, suffix) {
+    return {
+        ...model,
+        id: aliasId,
+        name: typeof model.name === "string" ? `${model.name} ${suffix}` : model.name,
+        api: isRecord(model.api) ? { ...model.api, id: aliasId } : model.api,
+        limit: withOneMillionContextLimit(model.limit),
+    };
+}
+export function add1mModelAliases(models) {
+    const mutableModels = models;
+    const entries = Object.entries(mutableModels);
+    for (const [modelId, model] of entries) {
+        const normalizedModelId = normalizeModelId(modelId);
+        if (normalizedModelId !== modelId)
+            continue;
+        if (!supports1mContext(modelId))
+            continue;
+        if (modelHasDefault1mContext(modelId)) {
+            model.limit = withOneMillionContextLimit(model.limit);
+        }
+        for (const suffix of ONE_M_MODEL_SUFFIXES) {
+            const aliasId = `${modelId}${suffix}`;
+            if (mutableModels[aliasId])
+                continue;
+            mutableModels[aliasId] = build1mAliasModel(model, aliasId, suffix);
+        }
+    }
+    return models;
 }
 // Maximum delay before we give up retrying and surface the error.
 // A retry-after longer than this signals a quota/usage-limit reset (hours away)
@@ -197,6 +241,12 @@ const plugin = async () => {
         console.warn("opencode-claude-auth: No Claude Code credentials found. Running in API key mode with transform hook enabled.");
     }
     return {
+        provider: {
+            id: "anthropic",
+            async models(provider) {
+                return add1mModelAliases(provider.models);
+            },
+        },
         config: async (opencodeConfig) => {
             applyOpencodeConfig(opencodeConfig);
         },
@@ -221,6 +271,7 @@ const plugin = async () => {
                     });
                     return {};
                 }
+                add1mModelAliases(provider.models);
                 for (const model of Object.values(provider.models)) {
                     model.cost = {
                         input: 0,

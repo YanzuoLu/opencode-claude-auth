@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.4-cc4 (2026-06-28)
+
+- Add OMP/Claude Code-style 1M model suffix handling with `[1m]` and OpenCode-friendly `-1m` aliases.
+- Strip 1M suffix aliases from Anthropic request bodies while adding `context-1m-2025-08-07` only for explicit/global Claude Sonnet/Opus 4.6 opt-ins.
+- Expose dynamic 1M provider aliases for supported/default-1M Anthropic models without creating aliases for unsupported Sonnet 4.5, Sonnet 4, or Haiku models.
+
 ## 1.5.4-cc3 (2026-06-28)
 
 - Make omp-style system prompt relocation the default to avoid Anthropic classifying OpenCode OAuth requests as third-party app extra-usage requests.
