@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.5.4-cc3 (2026-06-28)
+
+- Make omp-style system prompt relocation the default to avoid Anthropic classifying OpenCode OAuth requests as third-party app extra-usage requests.
+- Add `OPENCODE_CLAUDE_AUTH_KEEP_SYSTEM=1` as an opt-out for users who need third-party system prompts preserved in `system[]`.
+
 ## 1.5.4-cc2 (2026-06-28)
 
 - Adjust git install packaging for OpenCode by avoiding git-dependency prepare triggers and declaring the OpenCode plugin package as a runtime dependency.

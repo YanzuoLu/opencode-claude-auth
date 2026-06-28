@@ -9,7 +9,7 @@ import {
 import { sessionId } from "./session.ts"
 
 describe("transforms", () => {
-  it("transformBody keeps third-party system prompt in system by default", () => {
+  it("transformBody relocates third-party system prompt by default", () => {
     const input = JSON.stringify({
       system: [
         {
@@ -27,26 +27,22 @@ describe("transforms", () => {
     const parsed = JSON.parse(output as string) as {
       system: Array<{ text: string; cache_control?: unknown }>
       tools: Array<{ name: string }>
-      messages: Array<{ content: Array<{ text?: string }> }>
+      messages: Array<{ content: Array<{ text: string }> }>
     }
 
-    assert.equal(parsed.system.length, 3)
+    assert.equal(parsed.system.length, 2)
     assert.ok(parsed.system[0].text.startsWith("x-anthropic-billing-header:"))
     assert.equal(
       parsed.system[1].text,
       "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
     )
-    assert.equal(parsed.system[2].text, "OpenCode and opencode")
-    assert.deepEqual(parsed.system[2].cache_control, {
-      type: "ephemeral",
-      ttl: "1h",
-    })
     assert.equal(parsed.tools[0].name, "mcp_Search")
-    assert.ok(!parsed.messages[0].content[0].text?.includes("OpenCode"))
+    assert.ok(parsed.messages[0].content[0].text.includes("OpenCode"))
+    assert.ok(parsed.messages[0].content[0].text.includes("hello"))
   })
 
-  it("transformBody relocates system prompt only when rollback env is set", () => {
-    process.env.OPENCODE_CLAUDE_AUTH_RELOCATE_SYSTEM = "1"
+  it("transformBody keeps third-party system prompt when keep-system env is set", () => {
+    process.env.OPENCODE_CLAUDE_AUTH_KEEP_SYSTEM = "1"
     try {
       const input = JSON.stringify({
         system: [{ type: "text", text: "Custom instructions" }],
@@ -59,16 +55,34 @@ describe("transforms", () => {
         messages: Array<{ content: Array<{ text: string }> }>
       }
 
-      assert.equal(parsed.system.length, 2)
+      assert.equal(parsed.system.length, 3)
       assert.ok(parsed.system[0].text.startsWith("x-anthropic-billing-header:"))
       assert.equal(
         parsed.system[1].text,
         "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
       )
-      assert.ok(
-        parsed.messages[0].content[0].text.includes("Custom instructions"),
-      )
-      assert.ok(parsed.messages[0].content[0].text.includes("hello"))
+      assert.equal(parsed.system[2].text, "Custom instructions")
+      assert.equal(parsed.messages[0].content[0].text, "hello")
+    } finally {
+      delete process.env.OPENCODE_CLAUDE_AUTH_KEEP_SYSTEM
+    }
+  })
+
+  it("transformBody can disable default relocation with legacy env value 0", () => {
+    process.env.OPENCODE_CLAUDE_AUTH_RELOCATE_SYSTEM = "0"
+    try {
+      const input = JSON.stringify({
+        system: [{ type: "text", text: "Custom instructions" }],
+        messages: [{ role: "user", content: "hello" }],
+      })
+
+      const output = transformBody(input)
+      const parsed = JSON.parse(output as string) as {
+        system: Array<{ text: string }>
+      }
+
+      assert.equal(parsed.system.length, 3)
+      assert.equal(parsed.system[2].text, "Custom instructions")
     } finally {
       delete process.env.OPENCODE_CLAUDE_AUTH_RELOCATE_SYSTEM
     }

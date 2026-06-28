@@ -4,7 +4,7 @@ GitHub-only fork: <https://github.com/YanzuoLu/opencode-claude-auth>
 
 Self-contained Anthropic auth provider for OpenCode using your Claude Code credentials — no separate login or API key needed.
 
-This fork adds omp-style Anthropic OAuth request shaping: `local-agent` / Claude Agent SDK identity, real cch billing-header attestation, 1-hour prompt-cache retention, stable cache breakpoints, no system-prompt relocation by default, and a rollback env switch for the old relocation behavior.
+This fork adds omp-style Anthropic OAuth request shaping: `local-agent` / Claude Agent SDK identity, real cch billing-header attestation, 1-hour prompt-cache retention, stable cache breakpoints, and third-party system-prompt relocation by default to preserve Claude Code billing behavior.
 
 ## How it works
 
@@ -38,7 +38,7 @@ Install the YanzuoLu/opencode-claude-auth fork and configure it by following: ht
    ```json
    {
      "plugin": [
-       "git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc2"
+       "git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc3"
      ]
    }
    ```
@@ -155,7 +155,7 @@ Add `enable1mContext` to any agent in your `opencode.json` (project-level or `~/
 ```json
 {
   "plugin": [
-    "git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc2"
+    "git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc3"
   ],
   "agent": {
     "build": {
@@ -192,14 +192,15 @@ This reads your stored credentials, calls Anthropic's OAuth token endpoint, and 
 
 All configurable parameters can be overridden via environment variables. If Anthropic changes something before we publish an update, set an env var and keep working:
 
-| Variable                               | Description                                                                                                                                                                            | Default                                                                                                                                                                                               |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ANTHROPIC_BETA_FLAGS`                 | Comma-separated beta feature flags. If unset, this fork uses the local-agent Claude Code agent beta set and appends `extended-cache-ttl-2025-04-11` last.                              | `claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advanced-tool-use-2025-11-20` |
-| `ANTHROPIC_ENABLE_1M_CONTEXT`          | Enable 1M token context window for 4.6+ models (requires Max subscription)                                                                                                             | `false`                                                                                                                                                                                               |
-| `OPENCODE_CLAUDE_AUTH_CACHE_TTL`       | Set to `5m`, `none`, or `off` to disable the default 1-hour OAuth prompt-cache TTL and fall back to standard 5-minute ephemeral cache controls.                                        | OAuth defaults to `1h`                                                                                                                                                                                |
-| `OPENCODE_CLAUDE_AUTH_RELOCATE_SYSTEM` | Set to `1` to re-enable the legacy behavior that moves third-party system prompts into the first user message if Anthropic rejects the non-relocated local-agent layout.               | disabled                                                                                                                                                                                              |
-| `CLAUDE_AUTH_DEBUG`                    | Enable diagnostic logging (`1` for default path, or a custom file path)                                                                                                                | disabled                                                                                                                                                                                              |
-| `OPENCODE_CLAUDE_AUTH_MAX_RETRY_MS`    | Max ms the plugin waits when honouring a 429/529 `retry-after` header. Beyond this cap the response surfaces immediately so OpenCode doesn't appear to hang on hour-long quota resets. | `30000`                                                                                                                                                                                               |
+| Variable                               | Description                                                                                                                                                                                    | Default                                                                                                                                                                                               |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_BETA_FLAGS`                 | Comma-separated beta feature flags. If unset, this fork uses the local-agent Claude Code agent beta set and appends `extended-cache-ttl-2025-04-11` last.                                      | `claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advanced-tool-use-2025-11-20` |
+| `ANTHROPIC_ENABLE_1M_CONTEXT`          | Enable 1M token context window for 4.6+ models (requires Max subscription)                                                                                                                     | `false`                                                                                                                                                                                               |
+| `OPENCODE_CLAUDE_AUTH_CACHE_TTL`       | Set to `5m`, `none`, or `off` to disable the default 1-hour OAuth prompt-cache TTL and fall back to standard 5-minute ephemeral cache controls.                                                | OAuth defaults to `1h`                                                                                                                                                                                |
+| `OPENCODE_CLAUDE_AUTH_KEEP_SYSTEM`     | Set to `1` to keep third-party system prompts in `system[]` instead of relocating them into the first user message. This may cause Anthropic to classify the request as third-party app usage. | disabled                                                                                                                                                                                              |
+| `OPENCODE_CLAUDE_AUTH_RELOCATE_SYSTEM` | Legacy override. Set to `0`, `false`, or `off` to disable the default system relocation.                                                                                                       | enabled                                                                                                                                                                                               |
+| `CLAUDE_AUTH_DEBUG`                    | Enable diagnostic logging (`1` for default path, or a custom file path)                                                                                                                        | disabled                                                                                                                                                                                              |
+| `OPENCODE_CLAUDE_AUTH_MAX_RETRY_MS`    | Max ms the plugin waits when honouring a 429/529 `retry-after` header. Beyond this cap the response surfaces immediately so OpenCode doesn't appear to hang on hour-long quota resets.         | `30000`                                                                                                                                                                                               |
 
 Example:
 
@@ -218,7 +219,7 @@ export OPENCODE_CLAUDE_AUTH_CACHE_TTL=5m # rollback cache retention if needed
 - Sets required API headers (ordered beta flags, billing, local-agent user-agent, client/stainless headers) with model-aware selection
 - Patches the OAuth billing-header `cch=00000` placeholder at fetch time using `xxHash64(fullBody, seed)` before sending the request
 - Applies 1-hour OAuth prompt caching by upgrading existing OpenCode/AI-SDK 5-minute cache breakpoints and enforcing the Anthropic 4-breakpoint limit
-- Keeps third-party system prompts in `system[]` by default; set `OPENCODE_CLAUDE_AUTH_RELOCATE_SYSTEM=1` to roll back to legacy relocation if needed
+- Relocates third-party system prompts into the first user message by default, matching omp/Claude Code billing behavior; set `OPENCODE_CLAUDE_AUTH_KEEP_SYSTEM=1` to opt out
 - Adds stable JSON `metadata.user_id` with the same `session_id` as `X-Claude-Code-Session-Id`
 - On macOS, enumerates all `Claude Code-credentials*` Keychain entries and labels them by subscription tier
 - Provides an account switcher via `opencode auth login` when multiple accounts are found; persists selection to `~/.local/share/opencode/claude-account-source.txt`

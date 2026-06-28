@@ -153,6 +153,20 @@ function applyLegacySystemRelocation(parsed: {
   }
 }
 
+function shouldRelocateSystem(): boolean {
+  const keepSystem = process.env.OPENCODE_CLAUDE_AUTH_KEEP_SYSTEM
+  if (keepSystem === "1" || keepSystem?.toLowerCase() === "true") {
+    return false
+  }
+
+  const relocate = process.env.OPENCODE_CLAUDE_AUTH_RELOCATE_SYSTEM
+  if (relocate) {
+    return !["0", "false", "off"].includes(relocate.toLowerCase())
+  }
+
+  return true
+}
+
 function injectMetadataUserId(parsed: { metadata?: unknown }): void {
   const metadata = isRecord(parsed.metadata) ? parsed.metadata : {}
   let existing: Record<string, unknown> = {}
@@ -324,7 +338,7 @@ export function transformBody(
 
     injectMetadataUserId(parsed)
 
-    if (process.env.OPENCODE_CLAUDE_AUTH_RELOCATE_SYSTEM === "1") {
+    if (shouldRelocateSystem()) {
       applyLegacySystemRelocation(
         parsed as { system?: SystemEntry[]; messages?: Message[] },
       )

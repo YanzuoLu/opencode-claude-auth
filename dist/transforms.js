@@ -109,6 +109,17 @@ function applyLegacySystemRelocation(parsed) {
         firstUser.content.unshift({ type: "text", text: prefix });
     }
 }
+function shouldRelocateSystem() {
+    const keepSystem = process.env.OPENCODE_CLAUDE_AUTH_KEEP_SYSTEM;
+    if (keepSystem === "1" || keepSystem?.toLowerCase() === "true") {
+        return false;
+    }
+    const relocate = process.env.OPENCODE_CLAUDE_AUTH_RELOCATE_SYSTEM;
+    if (relocate) {
+        return !["0", "false", "off"].includes(relocate.toLowerCase());
+    }
+    return true;
+}
 function injectMetadataUserId(parsed) {
     const metadata = isRecord(parsed.metadata) ? parsed.metadata : {};
     let existing = {};
@@ -251,7 +262,7 @@ export function transformBody(body) {
             };
         }
         injectMetadataUserId(parsed);
-        if (process.env.OPENCODE_CLAUDE_AUTH_RELOCATE_SYSTEM === "1") {
+        if (shouldRelocateSystem()) {
             applyLegacySystemRelocation(parsed);
         }
         if (!Array.isArray(parsed.messages))
