@@ -1,6 +1,8 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import crypto from "node:crypto"
 import { config } from "./model-config.ts"
+import { wrapFetchForCch } from "./cch.ts"
+import { sessionId } from "./session.ts"
 import { readAllClaudeAccounts, type ClaudeAccount } from "./keychain.ts"
 import { initLogger, log } from "./logger.ts"
 import {
@@ -11,7 +13,11 @@ import {
   isLongContextError,
   LONG_CONTEXT_BETAS,
 } from "./betas.ts"
-import { transformBody, transformResponseStream } from "./transforms.ts"
+import {
+  SYSTEM_IDENTITY,
+  transformBody,
+  transformResponseStream,
+} from "./transforms.ts"
 import { applyOpencodeConfig } from "./plugin-config.ts"
 import {
   getCachedCredentials,
@@ -48,23 +54,12 @@ export {
 export { isEnable1mContext, type PluginSettings } from "./plugin-config.ts"
 export {
   buildBillingHeaderValue,
-  computeCch,
   computeVersionSuffix,
   extractFirstUserMessageText,
 } from "./signing.ts"
 
-const SYSTEM_IDENTITY_PREFIX =
-  "You are Claude Code, Anthropic's official CLI for Claude."
-
-function getCliVersion(): string {
-  return process.env.ANTHROPIC_CLI_VERSION ?? config.ccVersion
-}
-
 function getUserAgent(): string {
-  return (
-    process.env.ANTHROPIC_USER_AGENT ??
-    `claude-cli/${getCliVersion()} (external, sdk-cli)`
-  )
+  return `claude-cli/${config.ccVersion} (external, local-agent, agent-sdk/${config.claudeAgentSdkVersion})`
 }
 
 function getStainlessHeaders(): Record<string, string> {
@@ -73,11 +68,11 @@ function getStainlessHeaders(): Record<string, string> {
     "x-stainless-lang": "js",
     "x-stainless-os":
       process.platform === "darwin" ? "MacOS" : process.platform,
-    "x-stainless-package-version": "0.81.0",
+    "x-stainless-package-version": "0.94.0",
     "x-stainless-retry-count": "0",
     "x-stainless-runtime": "node",
     "x-stainless-runtime-version": process.version,
-    "x-stainless-timeout": "600",
+    "x-stainless-timeout": "900",
   }
 }
 
@@ -96,9 +91,6 @@ function buildRequestUrl(input: RequestInfo | URL): string | URL {
 
   return typeof input === "string" ? url.toString() : url
 }
-
-// Stable per-process session ID, matching Claude Code's X-Claude-Code-Session-Id
-const sessionId = crypto.randomUUID()
 
 type FetchFn = typeof fetch
 
@@ -154,6 +146,20 @@ export async function fetchWithRetry(
   return fetchImpl(input, init)
 }
 
+function mergeBetaHeaders(
+  modelBetas: string[],
+  incomingBeta: string,
+): string[] {
+  const merged = [...modelBetas]
+  for (const beta of incomingBeta
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)) {
+    if (!merged.includes(beta)) merged.push(beta)
+  }
+  return merged
+}
+
 export function buildRequestHeaders(
   input: RequestInfo | URL,
   init: RequestInit,
@@ -189,20 +195,18 @@ export function buildRequestHeaders(
 
   const modelBetas = getModelBetas(modelId, excludedBetas)
   const incomingBeta = headers.get("anthropic-beta") ?? ""
-  const mergedBetas = [
-    ...new Set([
-      ...modelBetas,
-      ...incomingBeta
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean),
-    ]),
-  ]
+  const mergedBetas = mergeBetaHeaders(modelBetas, incomingBeta)
 
   headers.set("authorization", `Bearer ${accessToken}`)
+  headers.set("accept", "application/json")
+  headers.set("accept-encoding", "gzip, deflate, br, zstd")
   headers.set("anthropic-version", "2023-06-01")
   headers.set("anthropic-beta", mergedBetas.join(","))
+  headers.set("anthropic-client-platform", "desktop_app")
+  headers.set("anthropic-client-version", config.claudeClientVersion)
   headers.set("anthropic-dangerous-direct-browser-access", "true")
+  headers.set("connection", "keep-alive")
+  headers.set("content-type", "application/json")
   headers.set("x-app", "cli")
   headers.set("user-agent", getUserAgent())
   headers.set("x-client-request-id", crypto.randomUUID())
@@ -287,10 +291,10 @@ const plugin: Plugin = async () => {
       }
 
       const hasIdentityPrefix = output.system.some((entry) =>
-        entry.includes(SYSTEM_IDENTITY_PREFIX),
+        entry.includes(SYSTEM_IDENTITY),
       )
       if (!hasIdentityPrefix) {
-        output.system.unshift(SYSTEM_IDENTITY_PREFIX)
+        output.system.unshift(SYSTEM_IDENTITY)
       }
     },
     auth: {
@@ -368,11 +372,17 @@ const plugin: Plugin = async () => {
               .filter(Boolean)
             log("fetch_headers_built", { headerKeys, betas, modelId })
 
-            let response = await fetchWithRetry(requestUrl, {
-              ...requestInit,
-              body,
-              headers,
-            })
+            const cchFetch = wrapFetchForCch(fetch)
+            let response = await fetchWithRetry(
+              requestUrl,
+              {
+                ...requestInit,
+                body,
+                headers,
+              },
+              3,
+              cchFetch,
+            )
 
             log("fetch_response", {
               status: response.status,
@@ -393,11 +403,16 @@ const plugin: Plugin = async () => {
                   modelId,
                   excluded,
                 )
-                response = await fetchWithRetry(requestUrl, {
-                  ...requestInit,
-                  body,
-                  headers: retryHeaders,
-                })
+                response = await fetchWithRetry(
+                  requestUrl,
+                  {
+                    ...requestInit,
+                    body,
+                    headers: retryHeaders,
+                  },
+                  3,
+                  cchFetch,
+                )
                 log("fetch_401_retry_result", {
                   status: response.status,
                   modelId,
@@ -446,11 +461,16 @@ const plugin: Plugin = async () => {
                 newExcluded,
               )
 
-              response = await fetchWithRetry(requestUrl, {
-                ...requestInit,
-                body,
-                headers: newHeaders,
-              })
+              response = await fetchWithRetry(
+                requestUrl,
+                {
+                  ...requestInit,
+                  body,
+                  headers: newHeaders,
+                },
+                3,
+                cchFetch,
+              )
             }
 
             // Log non-200 responses at warn level so they're visible in OpenCode

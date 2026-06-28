@@ -6,284 +6,154 @@ import {
   transformBody,
   transformResponseStream,
 } from "./transforms.ts"
+import { sessionId } from "./session.ts"
 
 describe("transforms", () => {
-  it("transformBody moves non-core system text to user message and PascalCase-prefixes tool names", () => {
+  it("transformBody keeps third-party system prompt in system by default", () => {
     const input = JSON.stringify({
-      system: [{ type: "text", text: "OpenCode and opencode" }],
+      system: [
+        {
+          type: "text",
+          text: "OpenCode and opencode",
+          cache_control: { type: "ephemeral" },
+        },
+      ],
       tools: [{ name: "search" }],
-      messages: [
-        { role: "user", content: [{ type: "tool_use", name: "lookup" }] },
-      ],
+      messages: [{ role: "user", content: "hello" }],
     })
 
     const output = transformBody(input)
     assert.equal(typeof output, "string")
     const parsed = JSON.parse(output as string) as {
-      system: Array<{ text: string }>
+      system: Array<{ text: string; cache_control?: unknown }>
       tools: Array<{ name: string }>
-      messages: Array<{
-        content: Array<{ type?: string; text?: string; name?: string }>
-      }>
+      messages: Array<{ content: Array<{ text?: string }> }>
     }
 
-    // system should only contain the billing header (non-core text relocated)
-    assert.equal(parsed.system.length, 1)
-    assert.ok(
-      parsed.system[0].text.startsWith("x-anthropic-billing-header:"),
-      "system[0] should be the billing header",
+    assert.equal(parsed.system.length, 3)
+    assert.ok(parsed.system[0].text.startsWith("x-anthropic-billing-header:"))
+    assert.equal(
+      parsed.system[1].text,
+      "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
     )
-    // The original system text should now be prepended to the first user message
-    assert.equal(parsed.messages[0].content[0].type, "text")
-    assert.equal(parsed.messages[0].content[0].text, "OpenCode and opencode")
+    assert.equal(parsed.system[2].text, "OpenCode and opencode")
+    assert.deepEqual(parsed.system[2].cache_control, {
+      type: "ephemeral",
+      ttl: "1h",
+    })
     assert.equal(parsed.tools[0].name, "mcp_Search")
-    assert.equal(parsed.messages[0].content[1].name, "mcp_Lookup")
+    assert.ok(!parsed.messages[0].content[0].text?.includes("OpenCode"))
   })
 
-  it("transformBody relocates non-core system text to user message", () => {
-    const input = JSON.stringify({
-      system: [
-        {
-          type: "text",
-          text: "Use opencode-claude-auth plugin instructions as-is.",
-        },
-      ],
-      messages: [{ role: "user", content: "hello" }],
-    })
+  it("transformBody relocates system prompt only when rollback env is set", () => {
+    process.env.OPENCODE_CLAUDE_AUTH_RELOCATE_SYSTEM = "1"
+    try {
+      const input = JSON.stringify({
+        system: [{ type: "text", text: "Custom instructions" }],
+        messages: [{ role: "user", content: "hello" }],
+      })
 
-    const output = transformBody(input)
-    assert.equal(typeof output, "string")
-    const parsed = JSON.parse(output as string) as {
-      system: Array<{ text: string }>
-      messages: Array<{ content: string }>
+      const output = transformBody(input)
+      const parsed = JSON.parse(output as string) as {
+        system: Array<{ text: string }>
+        messages: Array<{ content: Array<{ text: string }> }>
+      }
+
+      assert.equal(parsed.system.length, 2)
+      assert.ok(parsed.system[0].text.startsWith("x-anthropic-billing-header:"))
+      assert.equal(
+        parsed.system[1].text,
+        "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+      )
+      assert.ok(
+        parsed.messages[0].content[0].text.includes("Custom instructions"),
+      )
+      assert.ok(parsed.messages[0].content[0].text.includes("hello"))
+    } finally {
+      delete process.env.OPENCODE_CLAUDE_AUTH_RELOCATE_SYSTEM
     }
-
-    // Non-core system text should be moved to user message
-    assert.equal(parsed.system.length, 1) // only billing header
-    assert.ok(
-      parsed.messages[0].content.includes(
-        "Use opencode-claude-auth plugin instructions as-is.",
-      ),
-    )
   })
 
-  it("transformBody relocates URL/path system text to user message", () => {
+  it("transformBody injects billing header as system[0] with literal cch placeholder", () => {
     const input = JSON.stringify({
-      system: [
-        {
-          type: "text",
-          text: "OpenCode docs: https://example.com/opencode/docs and path /var/opencode/bin",
-        },
-      ],
-      messages: [{ role: "user", content: "hello" }],
-    })
-
-    const output = transformBody(input)
-    assert.equal(typeof output, "string")
-    const parsed = JSON.parse(output as string) as {
-      system: Array<{ text: string }>
-      messages: Array<{ content: string }>
-    }
-
-    // Non-core system text should be relocated
-    assert.equal(parsed.system.length, 1) // only billing header
-    assert.ok(
-      parsed.messages[0].content.includes(
-        "OpenCode docs: https://example.com/opencode/docs and path /var/opencode/bin",
-      ),
-    )
-  })
-
-  it("transformBody injects billing header as system[0] with computed cch", () => {
-    const input = JSON.stringify({
-      system: [{ type: "text", text: "system prompt" }],
       messages: [{ role: "user", content: "hey" }],
     })
 
     const output = transformBody(input)
     const parsed = JSON.parse(output as string) as {
-      system: Array<{ text: string }>
+      system: Array<{ type: string; text: string; cache_control?: unknown }>
     }
 
+    assert.deepEqual(Object.keys(parsed.system[0]), ["type", "text"])
     assert.ok(parsed.system[0].text.startsWith("x-anthropic-billing-header:"))
-    assert.ok(
-      parsed.system[0].text.includes("cch=fa690"),
-      `Expected cch=fa690 for 'hey', got: ${parsed.system[0].text}`,
-    )
+    assert.ok(parsed.system[0].text.includes("cc_entrypoint=local-agent"))
+    assert.ok(parsed.system[0].text.includes("cch=00000"))
+    assert.equal(parsed.system[0].cache_control, undefined)
   })
 
-  it("transformBody billing header has no cache_control", () => {
-    const input = JSON.stringify({
-      system: [
-        { type: "text", text: "prompt", cache_control: { type: "ephemeral" } },
-      ],
-      messages: [{ role: "user", content: "test" }],
-    })
+  it("transformBody clamps OAuth max_tokens to 64000 without raising", () => {
+    const high = JSON.parse(
+      transformBody(
+        JSON.stringify({
+          max_tokens: 128000,
+          messages: [{ role: "user", content: "hello" }],
+        }),
+      ) as string,
+    ) as { max_tokens: number }
+    const low = JSON.parse(
+      transformBody(
+        JSON.stringify({
+          max_tokens: 1024,
+          messages: [{ role: "user", content: "hello" }],
+        }),
+      ) as string,
+    ) as { max_tokens: number }
 
-    const output = transformBody(input)
-    const parsed = JSON.parse(output as string) as {
-      system: Array<{ text: string; cache_control?: unknown }>
-    }
-
-    // Billing header (system[0]) should not have cache_control
-    assert.equal(
-      parsed.system[0].cache_control,
-      undefined,
-      "Billing header must not have cache_control",
-    )
+    assert.equal(high.max_tokens, 64000)
+    assert.equal(low.max_tokens, 1024)
   })
 
-  it("transformBody splits concatenated identity prefix and relocates remainder to user message", () => {
-    const identity = "You are Claude Code, Anthropic's official CLI for Claude."
-    const input = JSON.stringify({
-      system: [
-        {
-          type: "text",
-          text: `${identity}\nWorking directory: /home/test`,
-        },
-      ],
-      messages: [{ role: "user", content: "test" }],
-    })
+  it("transformBody injects stable metadata.user_id session_id", () => {
+    const makeBody = () =>
+      JSON.parse(
+        transformBody(
+          JSON.stringify({ messages: [{ role: "user", content: "hello" }] }),
+        ) as string,
+      ) as { metadata: { user_id: string } }
 
-    const output = transformBody(input)
-    const parsed = JSON.parse(output as string) as {
-      system: Array<{ type: string; text: string }>
-      messages: Array<{ content: string }>
+    const first = JSON.parse(makeBody().metadata.user_id) as {
+      session_id?: string
+    }
+    const second = JSON.parse(makeBody().metadata.user_id) as {
+      session_id?: string
     }
 
-    // system[0] = billing header, system[1] = identity prefix
-    assert.ok(parsed.system[0].text.startsWith("x-anthropic-billing-header:"))
-    assert.equal(parsed.system[1].text, identity)
-    // remainder is relocated to user message
-    assert.equal(parsed.system.length, 2)
-    assert.ok(
-      parsed.messages[0].content.includes("Working directory: /home/test"),
+    assert.match(
+      first.session_id ?? "",
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     )
+    assert.equal(first.session_id, second.session_id)
+    assert.equal(first.session_id, sessionId)
   })
 
-  it("transformBody preserves identity without cache_control and relocates remainder", () => {
-    const identity = "You are Claude Code, Anthropic's official CLI for Claude."
-    const input = JSON.stringify({
-      system: [
-        {
-          type: "text",
-          text: `${identity}\nMore content here`,
-          cache_control: { type: "ephemeral", ttl: "1h" },
-        },
-      ],
-      messages: [{ role: "user", content: "test" }],
-    })
+  it("transformBody normalizes existing metadata.user_id to the shared session id", () => {
+    const parsed = JSON.parse(
+      transformBody(
+        JSON.stringify({
+          metadata: {
+            user_id: JSON.stringify({ session_id: "old", extra: true }),
+          },
+          messages: [{ role: "user", content: "hello" }],
+        }),
+      ) as string,
+    ) as { metadata: { user_id: string } }
 
-    const output = transformBody(input)
-    const parsed = JSON.parse(output as string) as {
-      system: Array<{ text: string; cache_control?: unknown }>
-      messages: Array<{ content: string }>
+    const userId = JSON.parse(parsed.metadata.user_id) as {
+      session_id?: string
+      extra?: boolean
     }
-
-    // Identity block should NOT have cache_control
-    assert.equal(
-      parsed.system[1].cache_control,
-      undefined,
-      "Identity block must not have cache_control",
-    )
-    // Remainder is relocated to user message, not kept in system
-    assert.equal(parsed.system.length, 2)
-    assert.ok(parsed.messages[0].content.includes("More content here"))
-  })
-
-  it("transformBody does not split identity-only system entry", () => {
-    const identity = "You are Claude Code, Anthropic's official CLI for Claude."
-    const input = JSON.stringify({
-      system: [{ type: "text", text: identity }],
-      messages: [{ role: "user", content: "test" }],
-    })
-
-    const output = transformBody(input)
-    const parsed = JSON.parse(output as string) as {
-      system: Array<{ text: string }>
-    }
-
-    // system[0] = billing, system[1] = identity (not split further)
-    assert.equal(parsed.system.length, 2)
-    assert.equal(parsed.system[1].text, identity)
-  })
-
-  it("transformBody removes duplicate billing headers and relocates non-core text", () => {
-    const input = JSON.stringify({
-      system: [
-        {
-          type: "text",
-          text: "x-anthropic-billing-header: cc_version=old; cc_entrypoint=cli; cch=00000;",
-        },
-        { type: "text", text: "prompt" },
-      ],
-      messages: [{ role: "user", content: "hey" }],
-    })
-
-    const output = transformBody(input)
-    const parsed = JSON.parse(output as string) as {
-      system: Array<{ text: string }>
-      messages: Array<{ content: string }>
-    }
-
-    const billingEntries = parsed.system.filter((e) =>
-      e.text.startsWith("x-anthropic-billing-header:"),
-    )
-    assert.equal(
-      billingEntries.length,
-      1,
-      "Should have exactly one billing header",
-    )
-    assert.ok(
-      billingEntries[0].text.includes("cch=fa690"),
-      `Expected computed cch, got: ${billingEntries[0].text}`,
-    )
-    // "prompt" should be relocated to user message
-    assert.ok(parsed.messages[0].content.includes("prompt"))
-  })
-
-  it("transformBody relocates multiple non-core system entries to user message as content blocks", () => {
-    const identity = "You are Claude Code, Anthropic's official CLI for Claude."
-    const input = JSON.stringify({
-      system: [
-        { type: "text", text: identity },
-        { type: "text", text: "Custom instructions block A" },
-        { type: "text", text: "Custom instructions block B" },
-      ],
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "hello" }],
-        },
-      ],
-    })
-
-    const output = transformBody(input)
-    const parsed = JSON.parse(output as string) as {
-      system: Array<{ text: string }>
-      messages: Array<{
-        content: Array<{ type: string; text: string }>
-      }>
-    }
-
-    // system should only have billing header + identity
-    assert.equal(parsed.system.length, 2)
-    assert.ok(parsed.system[0].text.startsWith("x-anthropic-billing-header:"))
-    assert.equal(parsed.system[1].text, identity)
-    // Both custom blocks should be prepended to user message content
-    assert.equal(parsed.messages[0].content[0].type, "text")
-    assert.ok(
-      parsed.messages[0].content[0].text.includes(
-        "Custom instructions block A",
-      ),
-    )
-    assert.ok(
-      parsed.messages[0].content[0].text.includes(
-        "Custom instructions block B",
-      ),
-    )
-    // Original user content preserved
-    assert.equal(parsed.messages[0].content[1].text, "hello")
+    assert.equal(userId.session_id, sessionId)
+    assert.equal(userId.extra, true)
   })
 
   it("transformBody keeps system intact when no messages exist", () => {
@@ -297,9 +167,7 @@ describe("transforms", () => {
       system: Array<{ text: string }>
     }
 
-    // With no messages to relocate into, system stays as-is
-    // (billing header + original text)
-    assert.ok(parsed.system.length >= 2)
+    assert.equal(parsed.system[2].text, "Some instructions")
   })
 
   it("transformBody strips output_config.effort for haiku", () => {
@@ -459,10 +327,21 @@ describe("transforms", () => {
       ],
       messages: [
         {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "toolu_1", name: "bash" },
+            {
+              type: "tool_use",
+              id: "toolu_2",
+              name: "background_output",
+            },
+          ],
+        },
+        {
           role: "user",
           content: [
-            { type: "tool_use", name: "bash" },
-            { type: "tool_use", name: "background_output" },
+            { type: "tool_result", tool_use_id: "toolu_1", content: "ok" },
+            { type: "tool_result", tool_use_id: "toolu_2", content: "ok" },
           ],
         },
       ],
@@ -808,15 +687,20 @@ describe("transforms", () => {
 
     const output = transformBody(input)
     const parsed = JSON.parse(output as string) as {
-      messages: Array<{ role: string; content: unknown }>
+      messages: Array<{
+        role: string
+        content: string | Array<{ text?: string }>
+      }>
     }
 
     // Orphaned tool_use message should be removed.
-    // The user message remains, with the relocated system "prompt" prepended.
+    // The user message remains, with cache_control applied by prompt caching.
     assert.equal(parsed.messages.length, 1)
     assert.equal(parsed.messages[0].role, "user")
+    const content = parsed.messages[0].content
+    const text = Array.isArray(content) ? content[0].text : content
     assert.ok(
-      (parsed.messages[0].content as string).includes("hello"),
+      text?.includes("hello"),
       "User message content should be preserved",
     )
   })

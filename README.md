@@ -1,10 +1,10 @@
 # opencode-claude-auth
 
-[![npm](https://img.shields.io/npm/v/opencode-claude-auth)](https://www.npmjs.com/package/opencode-claude-auth)
-[![CI](https://github.com/griffinmartin/opencode-claude-auth/actions/workflows/ci.yml/badge.svg)](https://github.com/griffinmartin/opencode-claude-auth/actions/workflows/ci.yml)
-[![Socket Badge](https://socket.dev/api/badge/npm/package/opencode-claude-auth)](https://socket.dev/npm/package/opencode-claude-auth)
+GitHub-only fork: <https://github.com/YanzuoLu/opencode-claude-auth>
 
 Self-contained Anthropic auth provider for OpenCode using your Claude Code credentials — no separate login or API key needed.
+
+This fork adds omp-style Anthropic OAuth request shaping: `local-agent` / Claude Agent SDK identity, real cch billing-header attestation, 1-hour prompt-cache retention, stable cache breakpoints, no system-prompt relocation by default, and a rollback env switch for the old relocation behavior.
 
 ## How it works
 
@@ -28,7 +28,7 @@ macOS is preferred (uses Keychain). Linux and Windows work via the credentials f
 Paste this into any LLM agent (Claude Code, OpenCode, Cursor, etc.):
 
 ```
-Install the opencode-claude-auth plugin and configure it by following: https://raw.githubusercontent.com/griffinmartin/opencode-claude-auth/main/installation.md
+Install the YanzuoLu/opencode-claude-auth fork and configure it by following: https://raw.githubusercontent.com/YanzuoLu/opencode-claude-auth/main/installation.md
 ```
 
 **Option B: Manual setup**
@@ -37,11 +37,21 @@ Install the opencode-claude-auth plugin and configure it by following: https://r
 
    ```json
    {
-     "plugin": ["opencode-claude-auth@latest"]
+     "plugin": [
+       "git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc1"
+     ]
    }
    ```
 
-   > The `@latest` tag ensures OpenCode always pulls the newest version on startup. No manual `npm install` is needed — OpenCode [automatically installs npm plugins using Bun at startup](https://opencode.ai/docs/plugins/#how-plugins-are-installed).
+   > This fork is distributed from GitHub tags, not npm. The tag includes compiled `dist/` files so OpenCode can load it directly. No manual `npm install` is needed — OpenCode [automatically installs plugins using Bun at startup](https://opencode.ai/docs/plugins/#how-plugins-are-installed).
+
+   If your OpenCode build does not accept git package specs, clone and build this repo, then use the local file path instead:
+
+   ```json
+   {
+     "plugin": ["/path/to/opencode-claude-auth/opencode-claude-auth.js"]
+   }
+   ```
 
 2. **Use it** — just run OpenCode. The plugin handles auth automatically using your Claude Code credentials.
 
@@ -55,7 +65,7 @@ Just run OpenCode. The plugin handles auth automatically — it reads your Claud
 
 ## Supported models
 
-15 supported models. Run `pnpm run test:models` to verify against your account.
+15 supported model aliases are listed below. Note: the inherited `scripts/test-models.ts` smoke helper predates this fork's transform/cch/cache path and should not be used as the release gate for this fork.
 
 | Model                      |
 | -------------------------- |
@@ -108,7 +118,7 @@ If only one account is found, the switcher is hidden and the plugin uses it dire
 | Keychain read timed out                             | Restart Keychain Access (can happen on macOS Tahoe)                                                                |
 | "Credentials are unavailable or expired"            | Run `claude` to refresh your Claude Code credentials                                                               |
 | "Extra usage is required for long context requests" | Your conversation exceeded 200k tokens. See [Long context (1M)](#long-context-1m) below                            |
-| Plugin not updating to latest version               | Delete the cached package: `rm -rf ~/.cache/opencode/packages/opencode-claude-auth@latest/` then restart OpenCode  |
+| Plugin not updating to the GitHub tag               | Delete cached plugin packages: `rm -rf ~/.cache/opencode/packages/*opencode-claude-auth*` then restart OpenCode    |
 
 ### Diagnostic logging
 
@@ -144,7 +154,9 @@ Add `enable1mContext` to any agent in your `opencode.json` (project-level or `~/
 
 ```json
 {
-  "plugin": ["opencode-claude-auth@latest"],
+  "plugin": [
+    "git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc1"
+  ],
   "agent": {
     "build": {
       "enable1mContext": true
@@ -161,7 +173,7 @@ export ANTHROPIC_ENABLE_1M_CONTEXT=true
 
 If both are set, the environment variable takes priority.
 
-The Claude CLI itself treats 1M context as opt-in (via a `[1m]` model suffix). Sending the beta without a plan that covers long context charges causes "Extra usage is required for long context requests" errors. Versions before 0.8.0 sent this beta automatically for 4.6+ models, which broke things for Pro users ([#64](https://github.com/griffinmartin/opencode-claude-auth/issues/64)).
+The Claude CLI itself treats 1M context as opt-in (via a `[1m]` model suffix). Sending the beta without a plan that covers long context charges causes "Extra usage is required for long context requests" errors. Older upstream releases sent this beta automatically for 4.6+ models, which broke things for Pro users.
 
 If a long context error still occurs (e.g. from a beta flag added via `ANTHROPIC_BETA_FLAGS`), the plugin retries without the offending flag.
 
@@ -180,20 +192,20 @@ This reads your stored credentials, calls Anthropic's OAuth token endpoint, and 
 
 All configurable parameters can be overridden via environment variables. If Anthropic changes something before we publish an update, set an env var and keep working:
 
-| Variable                            | Description                                                                                                                                                                            | Default                                                                                                 |
-| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `ANTHROPIC_CLI_VERSION`             | Claude CLI version for user-agent and billing headers                                                                                                                                  | `2.1.80`                                                                                                |
-| `ANTHROPIC_USER_AGENT`              | Full User-Agent string (overrides CLI version)                                                                                                                                         | `claude-cli/{version} (external, cli)`                                                                  |
-| `ANTHROPIC_BETA_FLAGS`              | Comma-separated beta feature flags                                                                                                                                                     | `claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,prompt-caching-scope-2026-01-05` |
-| `ANTHROPIC_ENABLE_1M_CONTEXT`       | Enable 1M token context window for 4.6+ models (requires Max subscription)                                                                                                             | `false`                                                                                                 |
-| `CLAUDE_AUTH_DEBUG`                 | Enable diagnostic logging (`1` for default path, or a custom file path)                                                                                                                | disabled                                                                                                |
-| `OPENCODE_CLAUDE_AUTH_MAX_RETRY_MS` | Max ms the plugin waits when honouring a 429/529 `retry-after` header. Beyond this cap the response surfaces immediately so OpenCode doesn't appear to hang on hour-long quota resets. | `30000`                                                                                                 |
+| Variable                               | Description                                                                                                                                                                            | Default                                                                                                                                                                                               |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_BETA_FLAGS`                 | Comma-separated beta feature flags. If unset, this fork uses the local-agent Claude Code agent beta set and appends `extended-cache-ttl-2025-04-11` last.                              | `claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advanced-tool-use-2025-11-20` |
+| `ANTHROPIC_ENABLE_1M_CONTEXT`          | Enable 1M token context window for 4.6+ models (requires Max subscription)                                                                                                             | `false`                                                                                                                                                                                               |
+| `OPENCODE_CLAUDE_AUTH_CACHE_TTL`       | Set to `5m`, `none`, or `off` to disable the default 1-hour OAuth prompt-cache TTL and fall back to standard 5-minute ephemeral cache controls.                                        | OAuth defaults to `1h`                                                                                                                                                                                |
+| `OPENCODE_CLAUDE_AUTH_RELOCATE_SYSTEM` | Set to `1` to re-enable the legacy behavior that moves third-party system prompts into the first user message if Anthropic rejects the non-relocated local-agent layout.               | disabled                                                                                                                                                                                              |
+| `CLAUDE_AUTH_DEBUG`                    | Enable diagnostic logging (`1` for default path, or a custom file path)                                                                                                                | disabled                                                                                                                                                                                              |
+| `OPENCODE_CLAUDE_AUTH_MAX_RETRY_MS`    | Max ms the plugin waits when honouring a 429/529 `retry-after` header. Beyond this cap the response surfaces immediately so OpenCode doesn't appear to hang on hour-long quota resets. | `30000`                                                                                                                                                                                               |
 
 Example:
 
 ```bash
-export ANTHROPIC_CLI_VERSION=2.2.0
 export ANTHROPIC_ENABLE_1M_CONTEXT=true  # requires Claude Max
+export OPENCODE_CLAUDE_AUTH_CACHE_TTL=5m # rollback cache retention if needed
 ```
 
 ## How it works (technical)
@@ -202,8 +214,12 @@ export ANTHROPIC_ENABLE_1M_CONTEXT=true  # requires Claude Max
 - Sets `Authorization: Bearer` with fresh OAuth tokens (cached in memory, 30s TTL, updated in-place after refresh)
 - Translates tool names between OpenCode and Anthropic API formats (adds/strips `mcp_` prefix)
 - Buffers SSE response streams at event boundaries for reliable tool name translation
-- Injects Claude Code identity into system prompts via `experimental.chat.system.transform`
-- Sets required API headers (beta flags, billing, user-agent) with model-aware selection
+- Injects the local-agent / Claude Agent SDK identity via `experimental.chat.system.transform`
+- Sets required API headers (ordered beta flags, billing, local-agent user-agent, client/stainless headers) with model-aware selection
+- Patches the OAuth billing-header `cch=00000` placeholder at fetch time using `xxHash64(fullBody, seed)` before sending the request
+- Applies 1-hour OAuth prompt caching by upgrading existing OpenCode/AI-SDK 5-minute cache breakpoints and enforcing the Anthropic 4-breakpoint limit
+- Keeps third-party system prompts in `system[]` by default; set `OPENCODE_CLAUDE_AUTH_RELOCATE_SYSTEM=1` to roll back to legacy relocation if needed
+- Adds stable JSON `metadata.user_id` with the same `session_id` as `X-Claude-Code-Session-Id`
 - On macOS, enumerates all `Claude Code-credentials*` Keychain entries and labels them by subscription tier
 - Provides an account switcher via `opencode auth login` when multiple accounts are found; persists selection to `~/.local/share/opencode/claude-account-source.txt`
 - Syncs credentials to `auth.json` on startup and every 5 minutes as a fallback (sync never triggers refresh; refresh is lazy, only on API requests)

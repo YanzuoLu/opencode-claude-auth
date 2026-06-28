@@ -1,6 +1,6 @@
 {
   "name": "opencode-claude-auth",
-  "version": "1.5.4",
+  "version": "1.5.4-cc1",
   "description": "OpenCode plugin that uses your Claude Code credentials — no separate login needed.",
   "keywords": [
     "anthropic",
@@ -12,12 +12,13 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/griffinmartin/opencode-claude-auth.git"
+    "url": "git+https://github.com/YanzuoLu/opencode-claude-auth.git"
   },
   "files": [
     "opencode-claude-auth.js",
     "dist",
-    "installation.md"
+    "installation.md",
+    "NOTICE"
   ],
   "type": "module",
   "main": "opencode-claude-auth.js",

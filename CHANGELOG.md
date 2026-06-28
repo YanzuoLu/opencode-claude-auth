@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.4-cc1 (2026-06-28)
+
+### Changes
+
+- Add OAuth 1h prompt caching with `extended-cache-ttl-2025-04-11` beta.
+- Keep system prompts in `system[]` by default; legacy relocation is available with `OPENCODE_CLAUDE_AUTH_RELOCATE_SYSTEM=1`.
+- Match the local-agent / Claude Agent SDK client identity and fingerprint.
+- Add real cch attestation patching for OAuth billing headers.
+- Clamp OAuth `max_tokens` to 64k.
+- Add stable `metadata.user_id` session IDs.
+
 ## [1.5.4](https://github.com/griffinmartin/opencode-claude-auth/compare/v1.5.3...v1.5.4) (2026-05-15)
 
 

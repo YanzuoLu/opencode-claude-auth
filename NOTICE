@@ -1,0 +1,3 @@
+This package is a fork of griffinmartin/opencode-claude-auth, distributed under the MIT License. See LICENSE for the retained license text.
+
+Anthropic OAuth request-shaping and prompt-caching behavior in this fork is reimplemented for interoperability, inspired by observed @oh-my-pi behavior. No @oh-my-pi source code is copied.

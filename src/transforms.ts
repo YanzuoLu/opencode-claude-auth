@@ -1,5 +1,12 @@
+import {
+  applyCaching,
+  getCacheControl,
+  type AnthropicCacheControl,
+  type CacheableRequestBody,
+} from "./caching.ts"
 import { buildBillingHeaderValue } from "./signing.ts"
 import { config, getModelOverride } from "./model-config.ts"
+import { sessionId } from "./session.ts"
 
 const TOOL_PREFIX = "mcp_"
 
@@ -19,14 +26,154 @@ function unprefixName(name: string): string {
   return `${name.charAt(0).toLowerCase()}${name.slice(1)}`
 }
 
-const SYSTEM_IDENTITY =
-  "You are Claude Code, Anthropic's official CLI for Claude."
+export const SYSTEM_IDENTITY =
+  "You are a Claude agent, built on Anthropic's Claude Agent SDK."
 
-type SystemEntry = { type?: string; text?: string } & Record<string, unknown>
-type ContentBlock = { type?: string; text?: string } & Record<string, unknown>
+const BILLING_PREFIX = "x-anthropic-billing-header:"
+
+type SystemEntry = {
+  type: "text"
+  text: string
+  cache_control?: AnthropicCacheControl
+} & Record<string, unknown>
+type ContentBlock = {
+  type?: string
+  text?: string
+  cache_control?: AnthropicCacheControl
+} & Record<string, unknown>
 type Message = {
   role?: string
   content?: string | ContentBlock[]
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+function canonicalTextEntry(
+  entry: Record<string, unknown>,
+  text: string,
+): SystemEntry {
+  const { type: _type, text: _text, ...rest } = entry
+  return { type: "text", text, ...rest }
+}
+
+function normalizeSystemEntries(system: unknown): SystemEntry[] {
+  if (typeof system === "string") return [{ type: "text", text: system }]
+  if (!Array.isArray(system)) return []
+
+  const entries: SystemEntry[] = []
+  for (const entry of system) {
+    if (typeof entry === "string") {
+      entries.push({ type: "text", text: entry })
+      continue
+    }
+    if (!isRecord(entry) || typeof entry.text !== "string") continue
+    const type = typeof entry.type === "string" ? entry.type : "text"
+    if (type !== "text") continue
+    entries.push(canonicalTextEntry(entry, entry.text))
+  }
+  return entries
+}
+
+function withoutCacheControl(entry: SystemEntry): SystemEntry {
+  const { cache_control: _cacheControl, ...rest } = entry
+  return rest as SystemEntry
+}
+
+function buildSystemLayout(parsed: {
+  system?: unknown
+  messages?: Message[]
+}): SystemEntry[] {
+  const billingHeader = buildBillingHeaderValue(
+    parsed.messages ?? [],
+    config.ccVersion,
+  )
+  const existing = normalizeSystemEntries(parsed.system)
+  let agentInstruction: SystemEntry | undefined
+  const remaining: SystemEntry[] = []
+
+  for (const entry of existing) {
+    if (entry.text.startsWith(BILLING_PREFIX)) continue
+
+    if (entry.text === SYSTEM_IDENTITY) {
+      agentInstruction ??= entry
+      continue
+    }
+
+    if (entry.text.startsWith(SYSTEM_IDENTITY)) {
+      const rest = entry.text.slice(SYSTEM_IDENTITY.length).replace(/^\n+/, "")
+      agentInstruction ??= withoutCacheControl({
+        ...entry,
+        text: SYSTEM_IDENTITY,
+      })
+      if (rest.length > 0) {
+        remaining.push({ ...entry, text: rest })
+      }
+      continue
+    }
+
+    remaining.push(entry)
+  }
+
+  return [
+    { type: "text", text: billingHeader },
+    agentInstruction ?? { type: "text", text: SYSTEM_IDENTITY },
+    ...remaining,
+  ]
+}
+
+function applyLegacySystemRelocation(parsed: {
+  system?: SystemEntry[]
+  messages?: Message[]
+}): void {
+  if (!Array.isArray(parsed.system)) return
+
+  const keptSystem: SystemEntry[] = []
+  const movedTexts: string[] = []
+  for (const entry of parsed.system) {
+    const text = entry.text ?? ""
+    if (text.startsWith(BILLING_PREFIX) || text.startsWith(SYSTEM_IDENTITY)) {
+      keptSystem.push(entry)
+    } else if (text.length > 0) {
+      movedTexts.push(text)
+    }
+  }
+
+  if (movedTexts.length === 0 || !Array.isArray(parsed.messages)) return
+  const firstUser = parsed.messages.find((message) => message.role === "user")
+  if (!firstUser) return
+
+  parsed.system = keptSystem
+  const prefix = movedTexts.join("\n\n")
+  if (typeof firstUser.content === "string") {
+    firstUser.content = `${prefix}\n\n${firstUser.content}`
+  } else if (Array.isArray(firstUser.content)) {
+    firstUser.content.unshift({ type: "text", text: prefix })
+  }
+}
+
+function injectMetadataUserId(parsed: { metadata?: unknown }): void {
+  const metadata = isRecord(parsed.metadata) ? parsed.metadata : {}
+  let existing: Record<string, unknown> = {}
+  if (typeof metadata.user_id === "string" && metadata.user_id.length > 0) {
+    try {
+      const parsedUserId = JSON.parse(metadata.user_id) as unknown
+      if (isRecord(parsedUserId)) existing = parsedUserId
+    } catch {
+      // Non-JSON user_id values are not Claude JSON metadata; normalize below.
+    }
+  }
+  parsed.metadata = {
+    ...metadata,
+    user_id: JSON.stringify({ ...existing, session_id: sessionId }),
+  }
+}
+
+function isThinkingEnabled(thinking: unknown): boolean {
+  if (!isRecord(thinking)) return false
+  if (thinking.type === "enabled") return true
+  return thinking.budget_tokens != null || thinking.budget != null
 }
 
 export function repairToolPairs(messages: Message[]): Message[] {
@@ -96,111 +243,18 @@ export function transformBody(
   try {
     const parsed = JSON.parse(body) as {
       model?: string
-      system?: SystemEntry[]
+      system?: unknown
       thinking?: Record<string, unknown>
       // eslint-disable-next-line @typescript-eslint/naming-convention
       output_config?: Record<string, unknown>
+      context_management?: unknown
+      max_tokens?: unknown
+      metadata?: unknown
       tools?: Array<{ name?: string } & Record<string, unknown>>
-      messages?: Array<{
-        role?: string
-        content?:
-          | string
-          | Array<{ type?: string; text?: string } & Record<string, unknown>>
-      }>
+      messages?: Message[]
     }
 
-    // --- Billing header: inject as system[0] (no cache_control) ---
-    const version = process.env.ANTHROPIC_CLI_VERSION ?? config.ccVersion
-    const entrypoint = process.env.CLAUDE_CODE_ENTRYPOINT ?? "sdk-cli"
-    const billingHeader = buildBillingHeaderValue(
-      (parsed.messages ?? []) as Array<{
-        role?: string
-        content?: string | Array<{ type?: string; text?: string }>
-      }>,
-      version,
-      entrypoint,
-    )
-
-    if (!Array.isArray(parsed.system)) {
-      parsed.system = []
-    }
-
-    // Remove any existing billing header entries
-    parsed.system = parsed.system.filter(
-      (e) =>
-        !(
-          e.type === "text" &&
-          typeof e.text === "string" &&
-          e.text.startsWith("x-anthropic-billing-header")
-        ),
-    )
-
-    // Insert billing header as system[0], without cache_control
-    parsed.system.unshift({ type: "text", text: billingHeader })
-
-    // --- Split identity prefix into its own system entry ---
-    // OpenCode's system.transform hook prepends the identity string, but
-    // OpenCode then concatenates all system entries into a single text block.
-    // Anthropic's API requires the identity string as a separate entry for
-    // OAuth validation (see issue #98).
-    const splitSystem: SystemEntry[] = []
-    for (const entry of parsed.system) {
-      if (
-        entry.type === "text" &&
-        typeof entry.text === "string" &&
-        entry.text.startsWith(SYSTEM_IDENTITY) &&
-        entry.text.length > SYSTEM_IDENTITY.length
-      ) {
-        const rest = entry.text
-          .slice(SYSTEM_IDENTITY.length)
-          .replace(/^\n+/, "")
-        // Preserve all properties except text (e.g. cache_control)
-        const { text: _text, ...entryProps } = entry
-        // Only keep cache_control on the remainder block to avoid exceeding
-        // the API limit of 4 cache_control blocks per request.
-        const { cache_control: _cc, ...identityProps } = entryProps
-        splitSystem.push({ ...identityProps, text: SYSTEM_IDENTITY })
-        if (rest.length > 0) {
-          splitSystem.push({ ...entryProps, text: rest })
-        }
-      } else {
-        splitSystem.push(entry)
-      }
-    }
-    parsed.system = splitSystem
-
-    // --- Relocate non-core system entries to user messages ---
-    // Anthropic's API now validates the system prompt for OAuth-authenticated
-    // requests that use Claude Code billing.  Third-party system prompts
-    // (like OpenCode's) trigger a 400 "out of extra usage" rejection when
-    // they appear inside the system[] array alongside the identity prefix.
-    //
-    // Work-around: keep only the billing header and identity prefix in
-    // system[], and prepend all other system content to the first user
-    // message where it is functionally equivalent but avoids the check.
-    const BILLING_PREFIX = "x-anthropic-billing-header"
-    const keptSystem: SystemEntry[] = []
-    const movedTexts: string[] = []
-    for (const entry of parsed.system) {
-      const txt = typeof entry === "string" ? entry : (entry.text ?? "")
-      if (txt.startsWith(BILLING_PREFIX) || txt.startsWith(SYSTEM_IDENTITY)) {
-        keptSystem.push(entry)
-      } else if (txt.length > 0) {
-        movedTexts.push(txt)
-      }
-    }
-    if (movedTexts.length > 0 && Array.isArray(parsed.messages)) {
-      const firstUser = parsed.messages.find((m) => m.role === "user")
-      if (firstUser) {
-        parsed.system = keptSystem
-        const prefix = movedTexts.join("\n\n")
-        if (typeof firstUser.content === "string") {
-          firstUser.content = prefix + "\n\n" + firstUser.content
-        } else if (Array.isArray(firstUser.content)) {
-          firstUser.content.unshift({ type: "text", text: prefix })
-        }
-      }
-    }
+    parsed.system = buildSystemLayout(parsed)
 
     // Strip effort for models that don't support it (e.g. haiku).
     // OpenCode sends { output_config: { effort: "high" } } but haiku
@@ -254,6 +308,30 @@ export function transformBody(
     if (Array.isArray(parsed.messages)) {
       parsed.messages = repairToolPairs(parsed.messages)
     }
+
+    if (typeof parsed.max_tokens === "number") {
+      parsed.max_tokens = Math.min(64000, parsed.max_tokens)
+    }
+
+    if (
+      isThinkingEnabled(parsed.thinking) &&
+      parsed.context_management === undefined
+    ) {
+      parsed.context_management = {
+        edits: [{ type: "clear_thinking_20251015", keep: "all" }],
+      }
+    }
+
+    injectMetadataUserId(parsed)
+
+    if (process.env.OPENCODE_CLAUDE_AUTH_RELOCATE_SYSTEM === "1") {
+      applyLegacySystemRelocation(
+        parsed as { system?: SystemEntry[]; messages?: Message[] },
+      )
+    }
+
+    if (!Array.isArray(parsed.messages)) parsed.messages = []
+    applyCaching(parsed as CacheableRequestBody, getCacheControl(true))
 
     return JSON.stringify(parsed)
   } catch {

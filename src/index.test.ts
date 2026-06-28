@@ -121,8 +121,11 @@ function buildAuthorizeResult(account: Account) {
 const SOURCE_FILES = [
   "index.ts",
   "betas.ts",
+  "caching.ts",
+  "cch.ts",
   "model-config.ts",
   "plugin-config.ts",
+  "session.ts",
   "signing.ts",
   "transforms.ts",
   "credentials.ts",
@@ -278,9 +281,23 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
     assert.equal(headers.get("anthropic-version"), "2023-06-01")
     assert.equal(headers.get("x-api-key"), null)
     assert.equal(headers.get("x-custom"), "keep-me")
-    assert.ok(headers.get("anthropic-beta")?.includes("custom-beta"))
+    assert.equal(headers.get("accept"), "application/json")
+    assert.equal(headers.get("anthropic-client-platform"), "desktop_app")
+    assert.equal(headers.get("anthropic-client-version"), "1.11187.4")
+    assert.deepEqual(headers.get("anthropic-beta")?.split(","), [
+      "claude-code-20250219",
+      "oauth-2025-04-20",
+      "interleaved-thinking-2025-05-14",
+      "context-management-2025-06-27",
+      "prompt-caching-scope-2026-01-05",
+      "mid-conversation-system-2026-04-07",
+      "advanced-tool-use-2025-11-20",
+      "effort-2025-11-24",
+      "extended-cache-ttl-2025-04-11",
+      "custom-beta",
+    ])
     assert.ok(
-      headers.get("anthropic-beta")?.includes("advisor-tool-2026-03-01"),
+      !headers.get("anthropic-beta")?.includes("advisor-tool-2026-03-01"),
     )
     assert.equal(
       headers.get("anthropic-dangerous-direct-browser-access"),
@@ -288,6 +305,8 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
     )
     assert.equal(headers.get("x-stainless-lang"), "js")
     assert.equal(headers.get("x-stainless-runtime"), "node")
+    assert.equal(headers.get("x-stainless-package-version"), "0.94.0")
+    assert.equal(headers.get("x-stainless-timeout"), "900")
     assert.equal(
       headers.get("x-anthropic-billing-header"),
       null,
@@ -353,6 +372,24 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
     )
   })
 
+  it("metadata.user_id session_id matches X-Claude-Code-Session-Id", () => {
+    const headers = helpers.buildRequestHeaders(
+      "https://api.anthropic.com/v1/messages",
+      { headers: {} },
+      "token",
+      "claude-sonnet-4-6",
+    )
+    const transformed = helpers.transformBody(
+      JSON.stringify({ messages: [{ role: "user", content: "hello" }] }),
+    ) as string
+    const parsed = JSON.parse(transformed) as { metadata: { user_id: string } }
+    const userId = JSON.parse(parsed.metadata.user_id) as {
+      session_id?: string
+    }
+
+    assert.equal(userId.session_id, headers.get("x-claude-code-session-id"))
+  })
+
   it("billing header is no longer set as HTTP header", () => {
     const headers = helpers.buildRequestHeaders(
       "https://api.anthropic.com/v1/messages",
@@ -367,67 +404,35 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
     )
   })
 
-  it("buildRequestHeaders uses ANTHROPIC_CLI_VERSION for user-agent", () => {
-    process.env.ANTHROPIC_CLI_VERSION = "9.9.9"
-    try {
-      const headers = helpers.buildRequestHeaders(
-        "https://api.anthropic.com/v1/messages",
-        { headers: {} },
-        "token",
-        "claude-sonnet-4-6",
-      )
-      assert.ok(
-        headers.get("user-agent")?.includes("9.9.9"),
-        `Expected user-agent to include 9.9.9, got: ${headers.get("user-agent")}`,
-      )
-      assert.ok(headers.get("user-agent")?.includes("sdk-cli"))
-    } finally {
-      delete process.env.ANTHROPIC_CLI_VERSION
-    }
+  it("buildRequestHeaders uses local-agent Claude Agent SDK user-agent", () => {
+    const headers = helpers.buildRequestHeaders(
+      "https://api.anthropic.com/v1/messages",
+      { headers: {} },
+      "token",
+      "claude-sonnet-4-6",
+    )
+
+    assert.equal(
+      headers.get("user-agent"),
+      "claude-cli/2.1.165 (external, local-agent, agent-sdk/0.3.165)",
+    )
   })
 
-  it("buildRequestHeaders uses ANTHROPIC_USER_AGENT when set", () => {
-    process.env.ANTHROPIC_USER_AGENT = "custom-agent/1.0"
-    try {
-      const headers = helpers.buildRequestHeaders(
-        "https://api.anthropic.com/v1/messages",
-        { headers: {} },
-        "token",
-        "claude-sonnet-4-6",
-      )
-      assert.equal(headers.get("user-agent"), "custom-agent/1.0")
-    } finally {
-      delete process.env.ANTHROPIC_USER_AGENT
+  it("transformBody uses ccVersion, local-agent, and cch placeholder in billing header", () => {
+    const { transformBody } = helpers
+    const body = JSON.stringify({
+      system: [{ type: "text", text: "test" }],
+      messages: [{ role: "user", content: "hey" }],
+    })
+    const result = transformBody(body)
+    assert.ok(typeof result === "string")
+    const parsed = JSON.parse(result as string) as {
+      system: Array<{ text: string }>
     }
-  })
-
-  it("ANTHROPIC_CLI_VERSION overrides version in billing header (via transformBody)", () => {
-    process.env.ANTHROPIC_CLI_VERSION = "9.9.9"
-    try {
-      // The billing header is now computed and injected by transformBody,
-      // so we test via transformBody rather than buildRequestHeaders
-      const { transformBody } = helpers
-      const body = JSON.stringify({
-        system: [{ type: "text", text: "test" }],
-        messages: [{ role: "user", content: "hey" }],
-      })
-      const result = transformBody(body)
-      assert.ok(typeof result === "string")
-      const parsed = JSON.parse(result as string) as {
-        system: Array<{ text: string }>
-      }
-      const billing = parsed.system[0].text
-      assert.ok(
-        billing.includes("cc_version=9.9.9"),
-        `Expected billing header to include 9.9.9, got: ${billing}`,
-      )
-      assert.ok(
-        billing.includes("cc_entrypoint=sdk-cli"),
-        `Expected billing header to include sdk-cli, got: ${billing}`,
-      )
-    } finally {
-      delete process.env.ANTHROPIC_CLI_VERSION
-    }
+    const billing = parsed.system[0].text
+    assert.ok(billing.includes("cc_version=2.1.165"))
+    assert.ok(billing.includes("cc_entrypoint=local-agent"))
+    assert.ok(billing.includes("cch=00000"))
   })
 
   it("buildRequestHeaders preserves provided stainless headers", () => {
@@ -668,7 +673,7 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
       ) => Promise<void>
 
       const prefixed =
-        "You are Claude Code, Anthropic's official CLI for Claude.\n\nExisting"
+        "You are a Claude agent, built on Anthropic's Claude Agent SDK.\n\nExisting"
       const output = { system: [prefixed] }
 
       await transform({ model: { providerID: "anthropic" } }, output)
@@ -703,7 +708,7 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
       const output = {
         system: [
           "Existing instruction",
-          "You are Claude Code, Anthropic's official CLI for Claude.\n\nAlready present",
+          "You are a Claude agent, built on Anthropic's Claude Agent SDK.\n\nAlready present",
         ],
       }
 
@@ -711,7 +716,9 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
 
       const occurrences = output.system
         .join("\n")
-        .match(/You are Claude Code, Anthropic's official CLI for Claude\./g)
+        .match(
+          /You are a Claude agent, built on Anthropic's Claude Agent SDK\./g,
+        )
       assert.equal(occurrences?.length, 1)
     } finally {
       globalThis.setInterval = originalSetInterval

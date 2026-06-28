@@ -1,6 +1,7 @@
 node_modules/
 .pnpm-store/
-dist/
+# This fork is distributed via GitHub tags instead of npm, so compiled dist/
+# artifacts are committed to make git/tarball installs work.
 .env
 *.env.local
 .sisyphus/

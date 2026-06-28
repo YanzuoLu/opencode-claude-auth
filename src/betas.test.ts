@@ -38,6 +38,22 @@ describe("betas", () => {
     }
   })
 
+  it("preserves Claude Code beta order and appends extended-cache-ttl last", () => {
+    const betas = getModelBetas("claude-sonnet-4-6")
+    assert.deepEqual(betas.slice(0, 7), [
+      "claude-code-20250219",
+      "oauth-2025-04-20",
+      "interleaved-thinking-2025-05-14",
+      "context-management-2025-06-27",
+      "prompt-caching-scope-2026-01-05",
+      "mid-conversation-system-2026-04-07",
+      "advanced-tool-use-2025-11-20",
+    ])
+    assert.ok(betas.includes("effort-2025-11-24"))
+    assert.equal(betas.at(-1), "extended-cache-ttl-2025-04-11")
+    assert.ok(!betas.includes("advisor-tool-2026-03-01"))
+  })
+
   it("getModelBetas includes non-excluded baseBetas for haiku", () => {
     const haikuBetas = getModelBetas("claude-haiku-4-5")
     const override = getModelOverride("claude-haiku-4-5")

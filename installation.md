@@ -46,13 +46,18 @@ This will prompt you to log in and store credentials in Keychain (macOS) or `~/.
 
 Edit the OpenCode configuration file at `~/.config/opencode/opencode.json`.
 
-Add `opencode-claude-auth@latest` to the `plugin` array:
+Add the tagged GitHub fork to the `plugin` array:
 
 ```json
 {
-  "plugin": ["opencode-claude-auth@latest"]
+  "plugin": [
+    "git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc1"
+  ]
 }
 ```
+
+This fork is GitHub-only (not published to npm). The release tag includes the
+compiled `dist/` files so OpenCode can load `opencode-claude-auth.js` directly.
 
 Or run this command to do it automatically:
 
@@ -60,14 +65,28 @@ Or run this command to do it automatically:
 node -e "
 const fs = require('fs'), p = require('path').join(require('os').homedir(), '.config/opencode/opencode.json');
 const c = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p,'utf8')) : {};
-c.plugin = [...new Set([...(Array.isArray(c.plugin) ? c.plugin : []), 'opencode-claude-auth@latest'])];
+const spec = 'git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc1';
+c.plugin = [...new Set([...(Array.isArray(c.plugin) ? c.plugin : [])
+  .filter(x => x !== 'opencode-claude-auth' && x !== 'opencode-claude-auth@latest'), spec])];
 fs.mkdirSync(require('path').dirname(p), {recursive:true});
 fs.writeFileSync(p, JSON.stringify(c, null, 2));
-console.log('Added opencode-claude-auth@latest to', p);
+console.log('Added', spec, 'to', p);
 "
 ```
 
-The `@latest` tag ensures OpenCode always pulls the newest version on startup. No manual `npm install` is needed — OpenCode [automatically installs npm plugins using Bun at startup](https://opencode.ai/docs/plugins/#how-plugins-are-installed).
+No manual `npm install` is needed — OpenCode [automatically installs plugins
+using Bun at startup](https://opencode.ai/docs/plugins/#how-plugins-are-installed).
+Because this is pinned to a Git tag, upgrade by changing the tag in the plugin
+spec and clearing the matching OpenCode package cache entry.
+
+If your OpenCode build refuses git package specs, use the local file fallback
+after cloning and building this repository:
+
+```json
+{
+  "plugin": ["/path/to/opencode-claude-auth/opencode-claude-auth.js"]
+}
+```
 
 ### Step 2: Verification
 
@@ -77,16 +96,19 @@ Verify the plugin was added:
 cat ~/.config/opencode/opencode.json
 ```
 
-You should see `opencode-claude-auth@latest` in the `plugin` array.
+You should see the `git+https://github.com/YanzuoLu/opencode-claude-auth.git#v1.5.4-cc1`
+spec in the `plugin` array.
 
 ## Upgrading
 
-If you previously installed `opencode-claude-auth` without the `@latest` tag, update your config to use `opencode-claude-auth@latest` as shown above.
+If you previously installed the npm `opencode-claude-auth@latest`, replace it
+with the GitHub tag spec shown above.
 
 If the plugin isn't picking up a new version, clear the cached package and restart OpenCode:
 
 ```bash
 rm -rf ~/.cache/opencode/packages/opencode-claude-auth@latest/
+rm -rf ~/.cache/opencode/packages/*opencode-claude-auth*
 ```
 
 ## Done

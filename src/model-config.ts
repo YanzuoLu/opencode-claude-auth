@@ -6,20 +6,25 @@ export interface ModelOverride {
 
 export interface ModelConfig {
   ccVersion: string
+  claudeAgentSdkVersion: string
+  claudeClientVersion: string
   baseBetas: string[]
   longContextBetas: string[]
   modelOverrides: Record<string, ModelOverride>
 }
 
 export const config: ModelConfig = {
-  ccVersion: "2.1.112",
+  ccVersion: "2.1.165",
+  claudeAgentSdkVersion: "0.3.165",
+  claudeClientVersion: "1.11187.4",
   baseBetas: [
     "claude-code-20250219",
     "oauth-2025-04-20",
     "interleaved-thinking-2025-05-14",
-    "prompt-caching-scope-2026-01-05",
     "context-management-2025-06-27",
-    "advisor-tool-2026-03-01",
+    "prompt-caching-scope-2026-01-05",
+    "mid-conversation-system-2026-04-07",
+    "advanced-tool-use-2025-11-20",
   ],
   longContextBetas: [
     "context-1m-2025-08-07",

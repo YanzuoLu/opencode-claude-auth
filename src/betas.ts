@@ -3,6 +3,11 @@ import { isEnable1mContext } from "./plugin-config.ts"
 
 // Beta flags to try removing in order when "long context" errors occur
 export const LONG_CONTEXT_BETAS = config.longContextBetas
+export const EXTENDED_CACHE_TTL_BETA = "extended-cache-ttl-2025-04-11"
+
+function appendBeta(betas: string[], beta: string): void {
+  if (!betas.includes(beta)) betas.push(beta)
+}
 
 function getRequiredBetas(): string[] {
   return (process.env.ANTHROPIC_BETA_FLAGS ?? config.baseBetas.join(","))
@@ -82,7 +87,9 @@ export function getModelBetas(
   modelId: string,
   excluded?: Set<string>,
 ): string[] {
-  const betas = [...getRequiredBetas()]
+  const betas = getRequiredBetas().filter(
+    (beta) => beta !== EXTENDED_CACHE_TTL_BETA,
+  )
 
   // context-1m is OPT-IN only, matching the official Claude CLI behavior.
   // The CLI only sends this beta when the model ID has a [1m] suffix.
@@ -93,7 +100,7 @@ export function getModelBetas(
   // Users who want 1M context should set ANTHROPIC_ENABLE_1M_CONTEXT=true
   // (requires a Claude Max subscription or a plan that covers extra usage).
   if (isEnable1mContext() && supports1mContext(modelId)) {
-    betas.push(config.longContextBetas[0])
+    appendBeta(betas, config.longContextBetas[0])
   }
 
   // Apply per-model overrides (e.g. haiku excludes claude-code-20250219)
@@ -107,10 +114,12 @@ export function getModelBetas(
     }
     if (override.add) {
       for (const add of override.add) {
-        if (!betas.includes(add)) betas.push(add)
+        if (add !== EXTENDED_CACHE_TTL_BETA) appendBeta(betas, add)
       }
     }
   }
+
+  appendBeta(betas, EXTENDED_CACHE_TTL_BETA)
 
   // Filter out excluded betas (from previous failed requests due to long context errors)
   if (excluded && excluded.size > 0) {
