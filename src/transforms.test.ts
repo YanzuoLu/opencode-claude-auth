@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import {
+  ensureTrailingUser,
   repairToolPairs,
   stripToolPrefix,
   transformBody,
@@ -786,6 +787,69 @@ describe("transforms", () => {
         },
       ])
     })
+  })
+
+  describe("ensureTrailingUser", () => {
+    it("appends a user turn when messages end with an assistant message", () => {
+      const messages = [
+        { role: "user", content: [{ type: "text", text: "hi" }] },
+        { role: "assistant", content: [{ type: "text", text: "partial..." }] },
+      ]
+      const result = ensureTrailingUser(messages)
+      assert.equal(result.length, messages.length + 1)
+      const appended = result[result.length - 1]
+      assert.equal(appended.role, "user")
+      const appendedContent = appended.content as Array<{
+        type?: string
+        text?: string
+      }>
+      assert.equal(appendedContent[0].type, "text")
+      assert.ok(
+        appendedContent[0].text?.includes(
+          "not recognized as a valid tool call",
+        ),
+      )
+      assert.deepEqual(result.slice(0, messages.length), messages)
+    })
+
+    it("leaves messages ending with a user message unchanged", () => {
+      const messages = [
+        { role: "assistant", content: [{ type: "text", text: "ok" }] },
+        { role: "user", content: [{ type: "text", text: "next" }] },
+      ]
+      const result = ensureTrailingUser(messages)
+      assert.deepEqual(result, messages)
+    })
+
+    it("passes through empty message lists", () => {
+      assert.deepEqual(ensureTrailingUser([]), [])
+    })
+  })
+
+  it("transformBody appends a trailing user turn for prefill-restricted models", () => {
+    const input = JSON.stringify({
+      system: [{ type: "text", text: "prompt" }],
+      messages: [
+        { role: "user", content: "hello" },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "thinking out loud" }],
+        },
+      ],
+    })
+
+    const output = transformBody(input)
+    const parsed = JSON.parse(output as string) as {
+      messages: Array<{
+        role: string
+        content: string | Array<{ text?: string }>
+      }>
+    }
+
+    const last = parsed.messages[parsed.messages.length - 1]
+    assert.equal(last.role, "user")
+    const content = last.content as Array<{ text?: string }>
+    assert.ok(content[0].text?.includes("not recognized as a valid tool call"))
   })
 
   it("transformBody keeps tool_use blocks and inserts omitted tool_results", () => {
