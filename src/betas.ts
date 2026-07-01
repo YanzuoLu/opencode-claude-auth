@@ -133,9 +133,9 @@ export function getModelBetas(
   // without a subscription that covers long context billing causes
   // "Extra usage is required for long context requests" errors.
   //
-  // Users who want 1M context should prefer selecting a [1m] / -1m model
-  // alias. The legacy ANTHROPIC_ENABLE_1M_CONTEXT=true / enable1mContext
-  // opt-in remains supported for Claude Sonnet/Opus 4.6 compatibility.
+  // Users who want 1M context should prefer selecting the `-1m` model alias
+  // (Claude Sonnet/Opus 4.6). The legacy ANTHROPIC_ENABLE_1M_CONTEXT=true /
+  // enable1mContext opt-in remains supported for 4.6 compatibility.
   if (shouldAdd1mContextBeta(modelId)) {
     appendBeta(betas, ONE_M_CONTEXT_BETA)
   }

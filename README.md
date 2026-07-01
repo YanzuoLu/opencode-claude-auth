@@ -78,20 +78,16 @@ Supported model aliases are listed below. Note: the inherited `scripts/test-mode
 | claude-opus-4-5            |
 | claude-opus-4-5-20251101   |
 | claude-opus-4-6            |
-| claude-opus-4-6[1m]        |
 | claude-opus-4-6-1m         |
 | claude-opus-4-7            |
-| claude-opus-4-7[1m]        |
-| claude-opus-4-7-1m         |
 | claude-sonnet-4-0          |
 | claude-sonnet-4-20250514   |
 | claude-sonnet-4-5          |
 | claude-sonnet-4-5-20250929 |
 | claude-sonnet-4-6          |
-| claude-sonnet-4-6[1m]      |
 | claude-sonnet-4-6-1m       |
 
-If OpenCode's Anthropic provider includes `claude-fable-5`, `claude-opus-4-8`, or other default-1M OMP models, this plugin also exposes matching `[1m]` and `-1m` aliases dynamically.
+Claude Sonnet/Opus 4.6 additionally expose a `-1m` alias to opt into 1M context (the base id stays at 200k). Default-1M models (e.g. `claude-opus-4-7`, `claude-opus-4-8`, `claude-fable-5`) are 1M at their base id with no suffix. This matches OMP, which uses the `-1m` suffix and drops the Claude Code-style `[1m]` convention (the plugin still accepts a typed `[1m]` id for backward compatibility).
 
 ## Credential sources
 

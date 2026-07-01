@@ -449,30 +449,36 @@ export function buildAccountLabels(creds) { return creds.map((_, i) => \`Account
 
     helpers.add1mModelAliases(models)
 
-    assert.equal(models["claude-sonnet-4-6[1m]"].id, "claude-sonnet-4-6[1m]")
+    // Opt-in models (4-6) expose a single `-1m` sibling; never `[1m]`.
+    assert.equal(models["claude-sonnet-4-6-1m"].id, "claude-sonnet-4-6-1m")
     assert.equal(models["claude-sonnet-4-6-1m"].api.id, "claude-sonnet-4-6-1m")
-    assert.equal(models["claude-opus-4-6[1m]"].limit.context, 1_000_000)
+    assert.equal(models["claude-opus-4-6-1m"].limit.context, 1_000_000)
     assert.equal(
       models["claude-opus-4-6-fast-1m"].id,
       "claude-opus-4-6-fast-1m",
     )
-    assert.equal(models["claude-fable-5[1m]"].api.id, "claude-fable-5[1m]")
-    assert.equal(models["claude-mythos-5-1m"].api.id, "claude-mythos-5-1m")
-    assert.equal(models["claude-opus-4-7-1m"].id, "claude-opus-4-7-1m")
-    assert.equal(
-      models["claude-opus-4-7-fast-1m"].id,
-      "claude-opus-4-7-fast-1m",
-    )
-    assert.equal(models["claude-opus-4-8[1m]"].id, "claude-opus-4-8[1m]")
-    assert.equal(
-      models["claude-opus-4-8-fast[1m]"].id,
-      "claude-opus-4-8-fast[1m]",
-    )
+    assert.equal(models["claude-sonnet-4-6[1m]"], undefined)
+    assert.equal(models["claude-opus-4-6[1m]"], undefined)
+    assert.equal(models["claude-opus-4-6-fast[1m]"], undefined)
+
+    // Default-1M models (4-7/4-8, fable/mythos-5) get no alias; base is 1M.
+    assert.equal(models["claude-opus-4-7-1m"], undefined)
+    assert.equal(models["claude-opus-4-7[1m]"], undefined)
+    assert.equal(models["claude-opus-4-8-1m"], undefined)
+    assert.equal(models["claude-opus-4-8[1m]"], undefined)
+    assert.equal(models["claude-opus-4-8-fast-1m"], undefined)
+    assert.equal(models["claude-fable-5-1m"], undefined)
+    assert.equal(models["claude-fable-5[1m]"], undefined)
+    assert.equal(models["claude-mythos-5-1m"], undefined)
     assert.equal(
       models["claude-opus-4-7"].limit.context,
       1_000_000,
       "default-1M base models should expose a 1M context limit",
     )
+    assert.equal(models["claude-opus-4-8"].limit.context, 1_000_000)
+    assert.equal(models["claude-fable-5"].limit.context, 1_000_000)
+
+    // Non-1M models are untouched.
     assert.equal(models["claude-sonnet-4-5[1m]"], undefined)
     assert.equal(models["claude-sonnet-4-5-1m"], undefined)
     assert.equal(models["claude-haiku-4-5[1m]"], undefined)

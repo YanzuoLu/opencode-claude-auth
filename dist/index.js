@@ -42,7 +42,7 @@ function buildRequestUrl(input) {
     return typeof input === "string" ? url.toString() : url;
 }
 const ONE_M_CONTEXT_LIMIT = 1_000_000;
-const ONE_M_MODEL_SUFFIXES = ["[1m]", "-1m"];
+const ONE_M_MODEL_SUFFIX = "-1m";
 function isRecord(value) {
     return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -73,15 +73,20 @@ export function add1mModelAliases(models) {
             continue;
         if (!supports1mContext(modelId))
             continue;
+        // Default-1M models (opus-4-7/4-8, fable/mythos-5) are already 1M at their
+        // base id in OMP's catalog, with no suffixed alias. Only make sure the base
+        // limit reflects 1M; do not derive a redundant sibling.
         if (modelHasDefault1mContext(modelId)) {
             model.limit = withOneMillionContextLimit(model.limit);
+            continue;
         }
-        for (const suffix of ONE_M_MODEL_SUFFIXES) {
-            const aliasId = `${modelId}${suffix}`;
-            if (mutableModels[aliasId])
-                continue;
-            mutableModels[aliasId] = build1mAliasModel(model, aliasId, suffix);
-        }
+        // Opt-in models (opus/sonnet-4-6): expose a single `-1m` sibling for 1M.
+        // OMP's canonical suffix is `-1m`; `[1m]` is a Claude Code/Z.AI convention
+        // that OMP drops, so we no longer emit it.
+        const aliasId = `${modelId}${ONE_M_MODEL_SUFFIX}`;
+        if (mutableModels[aliasId])
+            continue;
+        mutableModels[aliasId] = build1mAliasModel(model, aliasId, ONE_M_MODEL_SUFFIX);
     }
     return models;
 }
